@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capture OS | 激活</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .glass {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4 selection:bg-black selection:text-white">
+
+    <div class="glass w-full max-w-md p-8 rounded-3xl shadow-2xl relative overflow-hidden transform transition-all hover:scale-[1.01]">
+        
+        <div class="absolute top-0 left-0 w-32 h-32 bg-purple-300 rounded-full mix-blend-multiply filter blur-2xl opacity-30 -translate-x-1/2 -translate-y-1/2"></div>
+        <div class="absolute bottom-0 right-0 w-32 h-32 bg-blue-300 rounded-full mix-blend-multiply filter blur-2xl opacity-30 translate-x-1/2 translate-y-1/2"></div>
+
+        <div class="relative z-10 text-center">
+            <div class="mb-6 inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-black text-white shadow-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+            </div>
+
+            <h1 class="text-3xl font-bold text-gray-900 mb-2 tracking-tight">Capture OS</h1>
+            <p class="text-gray-500 mb-8 text-sm">连接您的第二大脑，从这里开始。</p>
+
+            <form action="/auth" method="GET" class="space-y-4" onsubmit="document.getElementById('btn-text').classList.add('hidden'); document.getElementById('loading').classList.remove('hidden');">
+                <div class="relative">
+                    <input type="text" name="key" required 
+                        class="w-full px-5 py-4 bg-gray-50 border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent transition-all"
+                        placeholder="输入您的 License Key (例如: vip-888)">
+                </div>
+
+                <button type="submit" class="w-full bg-black hover:bg-gray-800 text-white font-semibold py-4 rounded-xl shadow-lg transition duration-300 transform active:scale-95 flex items-center justify-center">
+                    <span id="btn-text">连接 Notion</span>
+                    <svg id="loading" class="animate-spin h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </button>
+            </form>
+
+            <div class="mt-6 text-xs text-gray-400">
+                <p>安全连接 • 官方授权 • 隐私保护</p>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

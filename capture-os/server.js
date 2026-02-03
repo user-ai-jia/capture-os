@@ -1,0 +1,304 @@
+require('dotenv').config();
+
+// --- 启动时自检 (保留，用于确认加载成功) ---
+console.log("------------------------------------------------");
+console.log("【环境诊断】正在检查密钥加载情况...");
+console.log("当前运行目录:", process.cwd());
+// 这里加了 trim() 只是为了显示好看，关键是下面业务逻辑里也要加
+const debugId = process.env.NOTION_CLIENT_ID ? process.env.NOTION_CLIENT_ID.trim() : "";
+console.log("Client ID:", debugId ? "✅ 已加载 (开头: " + debugId.substring(0, 4) + "...)" : "❌ 未加载");
+console.log("Client Secret:", process.env.NOTION_CLIENT_SECRET ? "✅ 已加载" : "❌ 未加载");
+console.log("------------------------------------------------");
+
+const express = require('express');
+const bodyParser = require('body-parser');
+const axios = require('axios');
+const OpenAI = require('openai');
+const path = require('path');
+const rateLimit = require('express-rate-limit');
+
+// 引入数据库模块（替换原有的 JSON 文件操作）
+const userRepo = require('./db/userRepo');
+
+const app = express();
+// Trust the first proxy (Sealos ingress) for correct client IP handling
+app.set('trust proxy', 1);
+
+// --------------------------------------------------
+// 中间件配置
+// --------------------------------------------------
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.static('public'));
+
+// --------------------------------------------------
+// 全局配置区
+// --------------------------------------------------
+const PORT = process.env.PORT || 3000;
+const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY;
+
+// 【关键修复】确保 BASE_URL 后面没有多余的斜杠，也没有空格
+const RAW_BASE_URL = process.env.BASE_URL || "";
+const BASE_URL = RAW_BASE_URL.trim().replace(/\/$/, "");
+
+// --------------------------------------------------
+// API 限速配置（防爆破）
+// --------------------------------------------------
+// 管理员跳过限速的检查函数
+const skipIfAdmin = (req, res) => {
+    const key = req.query.key || req.headers['authorization']?.replace('Bearer ', '').trim();
+    if (key) {
+        const user = userRepo.findByKey(key);
+        if (user && user.is_admin) {
+            return true; // 管理员跳过限速
+        }
+    }
+    return false;
+};
+
+const authLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 分钟
+    max: 5, // 每 IP 最多 5 次
+    message: { error: '请求过于频繁，请 1 分钟后再试' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: skipIfAdmin, // 管理员跳过
+});
+
+const captureLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 分钟
+    max: 30, // 每 IP 最多 30 次
+    message: { error: '请求过于频繁，请稍后再试' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: skipIfAdmin, // 管理员跳过
+});
+
+// ==================================================
+// 模块 1：前端与授权
+// ==================================================
+
+// 1. 用户绑定页面
+app.get('/setup', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 2. 发起 Notion 授权 (修复版)
+app.get('/auth', authLimiter, (req, res) => {
+    const licenseKey = req.query.key ? req.query.key.trim() : "";
+
+    // 从数据库查询用户
+    const user = userRepo.findByKey(licenseKey);
+
+    // 检查 Key 是否存在
+    if (!user) {
+        return res.send(`<h3 style="color:red;text-align:center;margin-top:50px;">错误：无效的 License Key (${licenseKey})</h3>`);
+    }
+
+    // 检查是否过期（管理员跳过）
+    if (!userRepo.isAdmin(user) && userRepo.isExpired(user)) {
+        return res.send(`<h3 style="color:red;text-align:center;margin-top:50px;">错误：License Key 已过期</h3>`);
+    }
+
+    // 【关键修复】在这里对 Client ID 进行清洗，去除可能存在的空格/换行
+    const rawClientId = process.env.NOTION_CLIENT_ID || "";
+    const clientId = rawClientId.trim();
+
+    if (!clientId) {
+        return res.send("错误：服务器未配置 NOTION_CLIENT_ID");
+    }
+
+    const redirectUri = `${BASE_URL}/callback`;
+
+    // 打印生成的链接，方便调试 (生产环境可删除)
+    console.log(`[Auth] 正在发起授权... Key: ${licenseKey}`);
+    console.log(`[Auth] 使用 Client ID: ${clientId}`);
+    console.log(`[Auth] 回调地址: ${redirectUri}`);
+
+    const notionAuthUrl = `https://api.notion.com/v1/oauth/authorize?client_id=${clientId}&response_type=code&owner=user&redirect_uri=${encodeURIComponent(redirectUri)}&state=${licenseKey}`;
+
+    res.redirect(notionAuthUrl);
+});
+
+// 3. 处理 Notion 回调
+app.get('/callback', async (req, res) => {
+    const code = req.query.code;
+    const licenseKey = req.query.state;
+    const error = req.query.error;
+
+    if (error) return res.send(`授权失败: ${error}`);
+
+    try {
+        // 【关键修复】Secret 也进行清洗
+        const rawClientId = process.env.NOTION_CLIENT_ID || "";
+        const rawClientSecret = process.env.NOTION_CLIENT_SECRET || "";
+
+        const authKey = `${rawClientId.trim()}:${rawClientSecret.trim()}`;
+        const encodedAuth = Buffer.from(authKey).toString('base64');
+
+        console.log(`[Callback] 正在用 Code 换 Token...`);
+
+        const response = await axios.post('https://api.notion.com/v1/oauth/token', {
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: `${BASE_URL}/callback`
+        }, {
+            headers: {
+                'Authorization': `Basic ${encodedAuth}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const accessToken = response.data.access_token;
+
+        // 使用数据库更新 Token
+        userRepo.updateToken(licenseKey, accessToken);
+
+        res.send(`
+            <div style="text-align:center; padding-top:50px; font-family:sans-serif;">
+                <h1 style="color:#10b981; font-size:40px;">🎉</h1>
+                <h2>配置成功！</h2>
+                <p>您的 Key: <b>${licenseKey}</b> 已成功绑定 Notion。</p>
+                <p>现在，您可以在快捷指令中直接使用此 Key，无需再填写 Token。</p>
+            </div>
+        `);
+
+    } catch (err) {
+        console.error("Auth Error:", err.response?.data || err.message);
+        res.send(`授权过程中发生错误: ${JSON.stringify(err.response?.data || err.message)}`);
+    }
+});
+
+
+// ==================================================
+// 模块 2：核心业务接口
+// ==================================================
+app.post('/capture', captureLimiter, async (req, res) => {
+    const authHeader = req.headers['authorization'];
+    const licenseKey = authHeader ? authHeader.replace('Bearer ', '').trim() : null;
+
+    // 从数据库查询用户
+    const user = userRepo.findByKey(licenseKey);
+
+    if (!user) return res.status(401).json({ error: "License Key 无效" });
+
+    // 检查是否过期（管理员跳过）
+    if (!userRepo.isAdmin(user) && userRepo.isExpired(user)) {
+        return res.status(403).json({ error: "License Key 已过期，请续费" });
+    }
+
+    if (!user.notion_token) return res.status(403).json({ error: "尚未绑定 Notion，请访问 /setup 页面进行配置" });
+
+    res.status(200).json({ msg: "Capture OS Pro 已接收，正在后台处理..." });
+
+    (async () => {
+        try {
+            const payload = req.body;
+            console.log(`[任务启动] Key: ${licenseKey} | URL: ${payload.url}`);
+
+            let targetDbId = payload.database_id;
+
+            if (!targetDbId) {
+                try {
+                    const searchRes = await axios.post('https://api.notion.com/v1/search', {
+                        filter: { value: 'database', property: 'object' },
+                        page_size: 1
+                    }, {
+                        headers: {
+                            'Authorization': `Bearer ${user.notion_token}`,
+                            'Notion-Version': '2022-06-28'
+                        }
+                    });
+
+                    if (searchRes.data.results.length > 0) {
+                        targetDbId = searchRes.data.results[0].id;
+                        console.log(`[自动匹配数据库] ID: ${targetDbId}`);
+                    } else {
+                        console.error("[错误] 用户授权了，但没找到任何数据库。");
+                        return;
+                    }
+                } catch (searchErr) {
+                    console.error("[搜索数据库失败]", searchErr.message);
+                    return;
+                }
+            }
+
+            let contentToProcess = payload.text || '';
+            if (payload.url) {
+                try {
+                    const pageRes = await axios.get(payload.url, {
+                        timeout: 8000,
+                        headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)' }
+                    });
+                    contentToProcess = `[URL]: ${payload.url}\n[Web Content]: ${pageRes.data.substring(0, 12000)}`;
+                } catch (e) {
+                    console.error("抓取失败:", e.message);
+                    contentToProcess = `[URL]: ${payload.url} (抓取失败，仅根据标题处理)`;
+                }
+            }
+
+            const client = new OpenAI({
+                apiKey: ZHIPU_API_KEY,
+                baseURL: 'https://open.bigmodel.cn/api/paas/v4/'
+            });
+
+            const completion = await client.chat.completions.create({
+                model: "glm-4",
+                messages: [
+                    {
+                        role: "system",
+                        content: `你是一个专业的知识管理助手。请分析用户输入的内容：
+1. Title: 提炼一个简短有力的标题。
+2. Summary: 生成一段通顺的中文摘要（50-100字）。
+3. Tags: 提取 3 个相关标签（数组格式）。
+4. Category: 从 ["灵感", "资源", "待办", "视觉"] 中选择最匹配的一个。
+
+请务必只返回纯 JSON 格式数据，不要包含 Markdown 代码块标记。`
+                    },
+                    { role: "user", content: contentToProcess }
+                ],
+                response_format: { type: "json_object" }
+            });
+
+            const jsonStr = completion.choices[0].message.content.replace(/```json|```/g, '').trim();
+            const aiResult = JSON.parse(jsonStr);
+
+            await axios.post('https://api.notion.com/v1/pages', {
+                parent: { database_id: targetDbId },
+                properties: {
+                    "Name": {
+                        title: [{ text: { content: aiResult.Title || "无标题" } }]
+                    },
+                    "URL": {
+                        url: payload.url || null
+                    },
+                    "Type": {
+                        select: { name: aiResult.Category || "资源" }
+                    },
+                    "Tags": {
+                        multi_select: (aiResult.Tags || []).map(t => ({ name: t }))
+                    },
+                    "Summary": {
+                        rich_text: [{ text: { content: aiResult.Summary || "" } }]
+                    }
+                }
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${user.notion_token}`,
+                    'Notion-Version': '2022-06-28',
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            console.log(`[任务成功] 已写入笔记: ${aiResult.Title}`);
+
+        } catch (err) {
+            console.error("[后台处理严重错误]", err.message);
+        }
+    })();
+});
+
+app.listen(PORT, () => {
+    console.log(`Capture OS Pro Server running on port ${PORT}`);
+    console.log(`[Database] 当前用户数: ${userRepo.count()}`);
+});
