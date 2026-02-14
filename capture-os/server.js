@@ -16,6 +16,7 @@ const axios = require('axios');
 const OpenAI = require('openai');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
+const cheerio = require('cheerio');
 
 // 引入数据库模块（替换原有的 JSON 文件操作）
 const userRepo = require('./db/userRepo');
@@ -227,13 +228,32 @@ app.post('/capture', captureLimiter, async (req, res) => {
             if (payload.url) {
                 try {
                     const pageRes = await axios.get(payload.url, {
-                        timeout: 8000,
-                        headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X)' }
+                        timeout: 10000,
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml',
+                            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+                        }
                     });
-                    contentToProcess = `[URL]: ${payload.url}\n[Web Content]: ${pageRes.data.substring(0, 12000)}`;
+
+                    // 使用 cheerio 提取纯文本正文
+                    const $ = cheerio.load(pageRes.data);
+
+                    // 移除无关标签
+                    $('script, style, nav, footer, header, aside, iframe, noscript, svg, .ad, .ads, .advertisement, .sidebar, .menu, .navigation').remove();
+
+                    // 优先从 article/main 中提取，否则从 body
+                    let mainContent = $('article').text() || $('main').text() || $('[role="main"]').text() || $('body').text();
+
+                    // 清理多余空白
+                    mainContent = mainContent.replace(/\s+/g, ' ').trim();
+
+                    // 截取前 6000 字符（纯文本信息密度远高于 HTML）
+                    contentToProcess = `[URL]: ${payload.url}\n[正文内容]:\n${mainContent.substring(0, 6000)}`;
+                    console.log(`[抓取成功] 提取纯文本 ${mainContent.length} 字符`);
                 } catch (e) {
                     console.error("抓取失败:", e.message);
-                    contentToProcess = `[URL]: ${payload.url} (抓取失败，仅根据标题处理)`;
+                    contentToProcess = `[URL]: ${payload.url}\n(网页抓取失败，请根据 URL 地址推测内容进行分析)`;
                 }
             }
 
@@ -247,11 +267,18 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 messages: [
                     {
                         role: "system",
-                        content: `你是一个专业的知识管理助手。请分析用户输入的内容：
-1. Title: 提炼一个简短有力的标题。
-2. Summary: 生成一段通顺的中文摘要（50-100字）。
-3. Tags: 提取 3 个相关标签（数组格式）。
-4. Category: 从 ["灵感", "资源", "待办", "视觉"] 中选择最匹配的一个。
+                        content: `你是一个顶级知识管理专家和内容策展人。请深度分析用户输入的内容，提取结构化知识。
+
+请返回以下 JSON 字段：
+
+1. "Title": 简短有力的中文标题（10-20字，要有吸引力）
+2. "Summary": 深度中文摘要（100-200字），要涵盖核心论点、关键数据和主要结论
+3. "Tags": 3-5 个精准标签（数组格式，中文）
+4. "Category": 从 ["文章", "工具", "灵感", "资源", "观点", "教程", "视觉"] 中选择最匹配的一个
+5. "KeyInsight": 最核心的一句话洞察/金句（20-40字，一句话说清这篇内容最有价值的点）
+6. "Difficulty": 从 ["入门", "进阶", "专业"] 中选择内容的难度等级
+7. "ActionItems": 2-3 个可执行的行动要点（数组格式，每条 15-30 字，以动词开头）
+8. "Emoji": 选择 1 个最能代表这篇内容主题的 emoji 符号
 
 请务必只返回纯 JSON 格式数据，不要包含 Markdown 代码块标记。`
                     },
@@ -263,8 +290,91 @@ app.post('/capture', captureLimiter, async (req, res) => {
             const jsonStr = completion.choices[0].message.content.replace(/```json|```/g, '').trim();
             const aiResult = JSON.parse(jsonStr);
 
+            // 构建 Notion 页面正文 blocks
+            const pageBlocks = [];
+
+            // 📌 核心洞察 Callout
+            if (aiResult.KeyInsight) {
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'callout',
+                    callout: {
+                        rich_text: [{ type: 'text', text: { content: aiResult.KeyInsight } }],
+                        icon: { type: 'emoji', emoji: '💡' },
+                        color: 'blue_background'
+                    }
+                });
+            }
+
+            // 空行分隔
+            pageBlocks.push({ object: 'block', type: 'divider', divider: {} });
+
+            // 📖 AI 摘要标题
+            pageBlocks.push({
+                object: 'block',
+                type: 'heading_2',
+                heading_2: {
+                    rich_text: [{ type: 'text', text: { content: '📖 摘要' } }]
+                }
+            });
+
+            // 摘要正文
+            if (aiResult.Summary) {
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'paragraph',
+                    paragraph: {
+                        rich_text: [{ type: 'text', text: { content: aiResult.Summary } }]
+                    }
+                });
+            }
+
+            // ☑️ 行动要点
+            if (aiResult.ActionItems && aiResult.ActionItems.length > 0) {
+                pageBlocks.push({ object: 'block', type: 'divider', divider: {} });
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'heading_2',
+                    heading_2: {
+                        rich_text: [{ type: 'text', text: { content: '✅ 行动要点' } }]
+                    }
+                });
+
+                for (const item of aiResult.ActionItems) {
+                    pageBlocks.push({
+                        object: 'block',
+                        type: 'to_do',
+                        to_do: {
+                            rich_text: [{ type: 'text', text: { content: item } }],
+                            checked: false
+                        }
+                    });
+                }
+            }
+
+            // 📎 原文链接
+            if (payload.url) {
+                pageBlocks.push({ object: 'block', type: 'divider', divider: {} });
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'heading_2',
+                    heading_2: {
+                        rich_text: [{ type: 'text', text: { content: '📎 原文链接' } }]
+                    }
+                });
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'bookmark',
+                    bookmark: { url: payload.url }
+                });
+            }
+
+            // 选择页面 icon emoji
+            const pageEmoji = aiResult.Emoji || '📝';
+
             await axios.post('https://api.notion.com/v1/pages', {
                 parent: { database_id: targetDbId },
+                icon: { type: 'emoji', emoji: pageEmoji },
                 properties: {
                     "Name": {
                         title: [{ text: { content: aiResult.Title || "无标题" } }]
@@ -279,9 +389,10 @@ app.post('/capture', captureLimiter, async (req, res) => {
                         multi_select: (aiResult.Tags || []).map(t => ({ name: t }))
                     },
                     "Summary": {
-                        rich_text: [{ text: { content: aiResult.Summary || "" } }]
+                        rich_text: [{ text: { content: (aiResult.Summary || "").substring(0, 2000) } }]
                     }
-                }
+                },
+                children: pageBlocks
             }, {
                 headers: {
                     'Authorization': `Bearer ${user.notion_token}`,
@@ -290,7 +401,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 }
             });
 
-            console.log(`[任务成功] 已写入笔记: ${aiResult.Title}`);
+            console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title}`);
 
         } catch (err) {
             console.error("[后台处理严重错误]", err.message);

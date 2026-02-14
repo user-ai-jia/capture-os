@@ -2,20 +2,19 @@
 
 app_env=${1:-development}
 
-# Define build target
-build_target="hello_world"
+# Define build target - Capture OS Pro
+APP_DIR="capture-os"
 
 # Development environment commands
 dev_commands() {
-    echo "Running development environment commands..."
-    NODE_ENV=development node "${build_target}.js"
+    echo "Running Capture OS Pro (development)..."
+    cd "$APP_DIR" && NODE_ENV=development node server.js
 }
 
 # Production environment commands
-# ※Compiled before release
 prod_commands() {
-    echo "Running production environment commands..."
-    NODE_ENV=production node "${build_target}.js"
+    echo "Running Capture OS Pro (production)..."
+    cd "$APP_DIR" && NODE_ENV=production node server.js
 }
 
 # Check environment variables to determine the running environment
