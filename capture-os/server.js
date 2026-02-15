@@ -339,10 +339,12 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     },
                     { role: "user", content: contentToProcess }
                 ],
-                response_format: { type: "json_object" }
+                response_format: undefined  // glm-4.6v 视觉模型不支持 json_object 模式
             });
 
-            const jsonStr = completion.choices[0].message.content.replace(/```json|```/g, '').trim();
+            const rawContent = completion.choices[0].message.content;
+            console.log(`[AI 原始返回] ${rawContent.substring(0, 200)}...`);
+            const jsonStr = rawContent.replace(/```json|```/g, '').trim();
             const aiResult = JSON.parse(jsonStr);
 
             // 构建 Notion 页面正文 blocks
@@ -465,7 +467,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
             console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title}`);
 
         } catch (err) {
-            console.error("[后台处理严重错误]", err.message);
+            console.error("[后台处理严重错误]", err.response?.data || err.message);
         }
     })();
 });
