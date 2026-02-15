@@ -15,7 +15,7 @@ const db = require('./database');
 
 const stmts = {
     findByKey: db.prepare(`
-        SELECT license_key, owner, connected, expire, notion_token, status, batch_id, is_admin, created_at, updated_at
+        SELECT license_key, owner, connected, expire, notion_token, database_id, status, batch_id, is_admin, created_at, updated_at
         FROM users 
         WHERE license_key = ?
     `),
@@ -67,6 +67,12 @@ const stmts = {
 
     getFirstN: db.prepare(`
         SELECT license_key FROM users ORDER BY created_at ASC LIMIT ?
+    `),
+
+    updateDatabaseId: db.prepare(`
+        UPDATE users 
+        SET database_id = ?, updated_at = CURRENT_TIMESTAMP 
+        WHERE license_key = ?
     `)
 };
 
@@ -265,11 +271,22 @@ function isAdmin(user) {
     return user && user.is_admin === true;
 }
 
+/**
+ * 更新用户的 Notion 数据库 ID
+ * @param {string} licenseKey
+ * @param {string} databaseId
+ * @returns {object} 更新结果
+ */
+function updateDatabaseId(licenseKey, databaseId) {
+    return stmts.updateDatabaseId.run(databaseId, licenseKey);
+}
+
 module.exports = {
     findByKey,
     create,
     createWithBatch,
     updateToken,
+    updateDatabaseId,
     setConnected,
     activate,
     isExpired,

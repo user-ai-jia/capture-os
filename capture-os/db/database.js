@@ -57,6 +57,11 @@ const initTable = () => {
         console.log('[Database] 添加字段: is_admin');
     }
 
+    if (!columnNames.includes('database_id')) {
+        db.exec(`ALTER TABLE users ADD COLUMN database_id TEXT`);
+        console.log('[Database] 添加字段: database_id');
+    }
+
     // 3. 创建索引
     db.exec(`
         CREATE INDEX IF NOT EXISTS idx_users_connected ON users(connected);

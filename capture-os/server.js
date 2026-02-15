@@ -155,11 +155,40 @@ app.get('/callback', async (req, res) => {
         // 使用数据库更新 Token
         userRepo.updateToken(licenseKey, accessToken);
 
+        // 自动检测并保存用户的 Notion 数据库 ID
+        let detectedDbId = null;
+        try {
+            const searchRes = await axios.post('https://api.notion.com/v1/search', {
+                filter: { value: 'database', property: 'object' },
+                page_size: 1
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Notion-Version': '2022-06-28'
+                }
+            });
+
+            if (searchRes.data.results.length > 0) {
+                detectedDbId = searchRes.data.results[0].id;
+                userRepo.updateDatabaseId(licenseKey, detectedDbId);
+                console.log(`[Callback] 自动检测到数据库: ${detectedDbId}`);
+            } else {
+                console.log(`[Callback] 未检测到数据库，用户需手动设置`);
+            }
+        } catch (dbErr) {
+            console.log(`[Callback] 检测数据库失败: ${dbErr.message}`);
+        }
+
+        const dbMsg = detectedDbId
+            ? `<p style="color:#059669;">✅ 已自动绑定 Notion 数据库</p>`
+            : `<p style="color:#f59e0b;">⚠️ 未检测到数据库，请手动设置：<br><code>POST /set-database</code> 传入 <code>database_id</code></p>`;
+
         res.send(`
             <div style="text-align:center; padding-top:50px; font-family:sans-serif;">
                 <h1 style="color:#10b981; font-size:40px;">🎉</h1>
                 <h2>配置成功！</h2>
                 <p>您的 Key: <b>${licenseKey}</b> 已成功绑定 Notion。</p>
+                ${dbMsg}
                 <p>现在，您可以在快捷指令中直接使用此 Key，无需再填写 Token。</p>
             </div>
         `);
@@ -168,6 +197,23 @@ app.get('/callback', async (req, res) => {
         console.error("Auth Error:", err.response?.data || err.message);
         res.send(`授权过程中发生错误: ${JSON.stringify(err.response?.data || err.message)}`);
     }
+});
+
+// 4. 手动设置数据库 ID（当 OAuth 未自动检测到时使用）
+app.post('/set-database', (req, res) => {
+    const licenseKey = (req.headers.authorization || '').replace('Bearer ', '').trim();
+    const { database_id } = req.body;
+
+    if (!licenseKey || !database_id) {
+        return res.status(400).json({ error: "需要 Authorization header (Bearer key) 和 body 中的 database_id" });
+    }
+
+    const user = userRepo.findByKey(licenseKey);
+    if (!user) return res.status(404).json({ error: "License Key 不存在" });
+
+    userRepo.updateDatabaseId(licenseKey, database_id);
+    console.log(`[设置数据库] Key: ${licenseKey} → DB: ${database_id}`);
+    res.json({ msg: "数据库 ID 已保存", database_id });
 });
 
 
@@ -199,6 +245,13 @@ app.post('/capture', captureLimiter, async (req, res) => {
 
             let targetDbId = payload.database_id;
 
+            // 优先使用已保存的 database_id
+            if (!targetDbId && user.database_id) {
+                targetDbId = user.database_id;
+                console.log(`[使用已保存数据库] ID: ${targetDbId}`);
+            }
+
+            // 最后才尝试 API 搜索（可能因 OAuth 未勾选数据库而失败）
             if (!targetDbId) {
                 try {
                     const searchRes = await axios.post('https://api.notion.com/v1/search', {
@@ -213,9 +266,11 @@ app.post('/capture', captureLimiter, async (req, res) => {
 
                     if (searchRes.data.results.length > 0) {
                         targetDbId = searchRes.data.results[0].id;
+                        // 找到了就保存，下次直接用
+                        userRepo.updateDatabaseId(licenseKey, targetDbId);
                         console.log(`[自动匹配数据库] ID: ${targetDbId}`);
                     } else {
-                        console.error("[错误] 用户授权了，但没找到任何数据库。");
+                        console.error("[错误] 用户授权了，但没找到任何数据库。请使用 /set-database 手动设置。");
                         return;
                     }
                 } catch (searchErr) {
@@ -390,6 +445,12 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     },
                     "Summary": {
                         rich_text: [{ text: { content: (aiResult.Summary || "").substring(0, 2000) } }]
+                    },
+                    "Difficulty": {
+                        select: { name: aiResult.Difficulty || "入门" }
+                    },
+                    "Status": {
+                        status: { name: "未读" }
                     }
                 },
                 children: pageBlocks
