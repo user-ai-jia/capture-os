@@ -452,7 +452,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
                         select: { name: aiResult.Difficulty || "入门" }
                     },
                     "Status": {
-                        status: { name: "未读" }
+                        status: { name: "未开始" }
                     }
                 },
                 children: pageBlocks
