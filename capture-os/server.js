@@ -318,7 +318,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
             });
 
             const completion = await client.chat.completions.create({
-                model: "glm-4",
+                model: "glm-4.6v",
                 messages: [
                     {
                         role: "system",
