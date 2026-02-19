@@ -14,7 +14,7 @@
 | 组件 | 技术 | 功能 |
 |------|------|------|
 | 后端服务器 | Node.js + Express | 处理 API 请求、OAuth 授权流程 |
-| AI 服务 | 智谱 AI (GLM-4) | 深度分析内容、生成标题/摘要/标签/洞察/行动要点 |
+| AI 服务 | 智谱 AI (GLM-4.6V) | 深度分析内容、生成标题/摘要/标签/洞察/行动要点 |
 | 网页解析 | Cheerio | 从 HTML 中提取纯文本正文，提升分析准确性 |
 | 数据存储 | Notion API | 将结构化笔记写入 Notion（含页面正文 blocks） |
 | 用户授权 | OAuth 2.0 | Notion 第三方应用授权 |
@@ -22,9 +22,11 @@
 
 ### 当前配置
 
-- **服务地址**: `https://fmevveaxlmzy.sealosbja.site`
+- **服务地址**: `https://lwsqdvsktvbg.cloud.sealos.io`
 - **端口**: 3000
-- **用户数据**: `users.json`
+- **用户数据**: SQLite 数据库 (`data/capture-os.db`)
+- **AI 模型**: GLM-4.6V（1000万 token 额度）
+- **最后更新**: 2026-02-15
 
 ---
 

@@ -121,7 +121,43 @@ app.get('/auth', authLimiter, (req, res) => {
     res.redirect(notionAuthUrl);
 });
 
-// 3. 处理 Notion 回调
+// --------------------------------------------------
+// 辅助函数：带重试的数据库搜索（解决 Notion Search API 索引延迟）
+// --------------------------------------------------
+async function searchDatabaseWithRetry(accessToken, maxRetries = 5, delayMs = 2000) {
+    for (let i = 1; i <= maxRetries; i++) {
+        try {
+            console.log(`[数据库检测] 第 ${i}/${maxRetries} 次尝试...`);
+            const searchRes = await axios.post('https://api.notion.com/v1/search', {
+                filter: { value: 'database', property: 'object' },
+                page_size: 5
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Notion-Version': '2022-06-28'
+                }
+            });
+
+            if (searchRes.data.results.length > 0) {
+                const dbId = searchRes.data.results[0].id;
+                const dbTitle = searchRes.data.results[0].title?.[0]?.plain_text || '未命名';
+                console.log(`[数据库检测] ✅ 第 ${i} 次找到: ${dbTitle} (${dbId})`);
+                return { id: dbId, title: dbTitle };
+            }
+        } catch (err) {
+            console.log(`[数据库检测] 第 ${i} 次失败: ${err.message}`);
+        }
+
+        // 最后一次不用等了
+        if (i < maxRetries) {
+            console.log(`[数据库检测] 等待 ${delayMs}ms 后重试...`);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+    return null;
+}
+
+// 3. 处理 Notion 回调（带重试 + 自动轮询兜底）
 app.get('/callback', async (req, res) => {
     const code = req.query.code;
     const licenseKey = req.query.state;
@@ -130,7 +166,6 @@ app.get('/callback', async (req, res) => {
     if (error) return res.send(`授权失败: ${error}`);
 
     try {
-        // 【关键修复】Secret 也进行清洗
         const rawClientId = process.env.NOTION_CLIENT_ID || "";
         const rawClientSecret = process.env.NOTION_CLIENT_SECRET || "";
 
@@ -152,51 +187,183 @@ app.get('/callback', async (req, res) => {
 
         const accessToken = response.data.access_token;
 
-        // 使用数据库更新 Token
+        // 保存 Token
         userRepo.updateToken(licenseKey, accessToken);
+        console.log(`[Callback] Token 已保存: ${licenseKey}`);
 
-        // 自动检测并保存用户的 Notion 数据库 ID
-        let detectedDbId = null;
-        try {
-            const searchRes = await axios.post('https://api.notion.com/v1/search', {
-                filter: { value: 'database', property: 'object' },
-                page_size: 1
-            }, {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'Notion-Version': '2022-06-28'
-                }
-            });
+        // 带重试的数据库自动检测（最多 5 次，每次间隔 2 秒）
+        const dbResult = await searchDatabaseWithRetry(accessToken, 5, 2000);
 
-            if (searchRes.data.results.length > 0) {
-                detectedDbId = searchRes.data.results[0].id;
-                userRepo.updateDatabaseId(licenseKey, detectedDbId);
-                console.log(`[Callback] 自动检测到数据库: ${detectedDbId}`);
-            } else {
-                console.log(`[Callback] 未检测到数据库，用户需手动设置`);
-            }
-        } catch (dbErr) {
-            console.log(`[Callback] 检测数据库失败: ${dbErr.message}`);
+        if (dbResult) {
+            // ✅ 重试成功，直接显示成功页
+            userRepo.updateDatabaseId(licenseKey, dbResult.id);
+            res.send(`
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>配置成功 | Capture OS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Inter', -apple-system, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+                    .card { background: white; border-radius: 24px; padding: 48px 32px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+                    .icon { font-size: 56px; margin-bottom: 16px; }
+                    h2 { color: #111; font-size: 22px; margin-bottom: 8px; }
+                    .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
+                    .db-info { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin-bottom: 24px; }
+                    .db-info .label { color: #6b7280; font-size: 12px; margin-bottom: 4px; }
+                    .db-info .value { color: #059669; font-size: 15px; font-weight: 600; }
+                    .key-badge { display: inline-block; background: #f1f5f9; color: #475569; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; margin-bottom: 24px; }
+                    .hint { color: #9ca3af; font-size: 13px; line-height: 1.6; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">🎉</div>
+                    <h2>配置成功！</h2>
+                    <p class="subtitle">Notion 授权已完成，数据库已自动绑定</p>
+                    <div class="db-info">
+                        <div class="label">已绑定数据库</div>
+                        <div class="value">📗 ${dbResult.title}</div>
+                    </div>
+                    <div class="key-badge">${licenseKey}</div>
+                    <p class="hint">现在可以在快捷指令中使用此 Key<br>所有内容将自动保存到上方数据库</p>
+                </div>
+            </body>
+            </html>
+            `);
+        } else {
+            // ❌ 重试都失败了 → 返回自动轮询页面，前端继续等待
+            console.log(`[Callback] 重试 5 次均未检测到数据库，启动前端轮询`);
+            res.send(`
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>正在绑定数据库... | Capture OS</title>
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+                <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    body { font-family: 'Inter', -apple-system, sans-serif; background: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+                    .card { background: white; border-radius: 24px; padding: 48px 32px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+                    .spinner { width: 48px; height: 48px; border: 4px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 20px; }
+                    @keyframes spin { to { transform: rotate(360deg); } }
+                    h2 { color: #111; font-size: 20px; margin-bottom: 8px; }
+                    .subtitle { color: #6b7280; font-size: 14px; margin-bottom: 24px; }
+                    #status { color: #9ca3af; font-size: 13px; margin-top: 16px; }
+                    .success-icon { font-size: 56px; margin-bottom: 16px; display: none; }
+                    .db-info { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 16px; margin: 20px 0; display: none; }
+                    .db-info .label { color: #6b7280; font-size: 12px; margin-bottom: 4px; }
+                    .db-info .value { color: #059669; font-size: 15px; font-weight: 600; }
+                    .hint { color: #9ca3af; font-size: 13px; line-height: 1.6; display: none; }
+                    .key-badge { display: inline-block; background: #f1f5f9; color: #475569; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-family: monospace; margin-bottom: 16px; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="spinner" id="spinner"></div>
+                    <div class="success-icon" id="successIcon">🎉</div>
+                    <h2 id="title">正在绑定数据库...</h2>
+                    <p class="subtitle" id="subtitle">Notion 授权成功，正在检测您选择的数据库</p>
+                    <div class="key-badge">${licenseKey}</div>
+                    <div class="db-info" id="dbInfo">
+                        <div class="label">已绑定数据库</div>
+                        <div class="value" id="dbName"></div>
+                    </div>
+                    <p class="hint" id="hint">现在可以在快捷指令中使用此 Key<br>所有内容将自动保存到上方数据库</p>
+                    <div id="status">第 1 次检测中...</div>
+                </div>
+                <script>
+                    const key = "${licenseKey}";
+                    let attempt = 0;
+                    const maxAttempts = 30;
+
+                    async function checkDatabase() {
+                        attempt++;
+                        document.getElementById('status').textContent = '第 ' + attempt + ' 次检测中...';
+
+                        try {
+                            const res = await fetch('/check-database?key=' + encodeURIComponent(key));
+                            const data = await res.json();
+
+                            if (data.found) {
+                                // 成功！切换到成功状态
+                                document.getElementById('spinner').style.display = 'none';
+                                document.getElementById('successIcon').style.display = 'block';
+                                document.getElementById('title').textContent = '配置成功！';
+                                document.getElementById('subtitle').textContent = 'Notion 授权已完成，数据库已自动绑定';
+                                document.getElementById('dbName').textContent = '📗 ' + data.title;
+                                document.getElementById('dbInfo').style.display = 'block';
+                                document.getElementById('hint').style.display = 'block';
+                                document.getElementById('status').style.display = 'none';
+                                return;
+                            }
+                        } catch (e) {
+                            console.error('检测失败:', e);
+                        }
+
+                        if (attempt < maxAttempts) {
+                            setTimeout(checkDatabase, 3000);
+                        } else {
+                            document.getElementById('status').textContent = '检测超时，请关闭页面后重新访问 /setup 进行授权';
+                            document.getElementById('spinner').style.display = 'none';
+                        }
+                    }
+
+                    // 3 秒后开始第一次轮询
+                    setTimeout(checkDatabase, 3000);
+                </script>
+            </body>
+            </html>
+            `);
         }
-
-        const dbMsg = detectedDbId
-            ? `<p style="color:#059669;">✅ 已自动绑定 Notion 数据库</p>`
-            : `<p style="color:#f59e0b;">⚠️ 未检测到数据库，请手动设置：<br><code>POST /set-database</code> 传入 <code>database_id</code></p>`;
-
-        res.send(`
-            <div style="text-align:center; padding-top:50px; font-family:sans-serif;">
-                <h1 style="color:#10b981; font-size:40px;">🎉</h1>
-                <h2>配置成功！</h2>
-                <p>您的 Key: <b>${licenseKey}</b> 已成功绑定 Notion。</p>
-                ${dbMsg}
-                <p>现在，您可以在快捷指令中直接使用此 Key，无需再填写 Token。</p>
-            </div>
-        `);
 
     } catch (err) {
         console.error("Auth Error:", err.response?.data || err.message);
         res.send(`授权过程中发生错误: ${JSON.stringify(err.response?.data || err.message)}`);
     }
+});
+
+// 3.5 数据库检测轮询接口（供前端页面调用）
+app.get('/check-database', async (req, res) => {
+    const licenseKey = req.query.key;
+    if (!licenseKey) return res.json({ found: false, error: 'missing key' });
+
+    const user = userRepo.findByKey(licenseKey);
+    if (!user || !user.notion_token) return res.json({ found: false, error: 'no token' });
+
+    // 如果已有 database_id，直接返回成功
+    if (user.database_id) {
+        return res.json({ found: true, title: '已绑定', database_id: user.database_id });
+    }
+
+    // 尝试搜索
+    try {
+        const searchRes = await axios.post('https://api.notion.com/v1/search', {
+            filter: { value: 'database', property: 'object' },
+            page_size: 5
+        }, {
+            headers: {
+                'Authorization': `Bearer ${user.notion_token}`,
+                'Notion-Version': '2022-06-28'
+            }
+        });
+
+        if (searchRes.data.results.length > 0) {
+            const dbId = searchRes.data.results[0].id;
+            const dbTitle = searchRes.data.results[0].title?.[0]?.plain_text || '未命名';
+            userRepo.updateDatabaseId(licenseKey, dbId);
+            console.log(`[轮询检测] ✅ 找到数据库: ${dbTitle} (${dbId}) for ${licenseKey}`);
+            return res.json({ found: true, title: dbTitle, database_id: dbId });
+        }
+    } catch (err) {
+        console.log(`[轮询检测] 搜索失败: ${err.message}`);
+    }
+
+    res.json({ found: false });
 });
 
 // 4. 手动设置数据库 ID（当 OAuth 未自动检测到时使用）
@@ -452,7 +619,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
                         select: { name: aiResult.Difficulty || "入门" }
                     },
                     "Status": {
-                        status: { name: "未开始" }
+                        status: { name: "Not started" }
                     }
                 },
                 children: pageBlocks

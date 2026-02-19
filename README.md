@@ -6,8 +6,9 @@
 
 - **一键捕获** — iPhone 快捷指令分享即存，自动处理
 - **智能解析** — Cheerio 提取网页纯文本，精准分析
-- **AI 深度分析** — 智谱 GLM-4 自动生成标题、摘要、标签、核心洞察、行动要点
+- **AI 深度分析** — 智谱 GLM-4.6V 自动生成标题、摘要、标签、核心洞察、行动要点
 - **精美笔记** — Notion 页面自动排版：💡 洞察 Callout + 📖 摘要 + ✅ 行动清单 + 📎 原文链接
+- **智能数据库发现** — Notion 数据库 ID 三层自动解析（已保存 → OAuth 检测 → 手动设置）
 - **商业就绪** — License Key 激活码系统 + SQLite 数据库 + API 限速防护
 
 ## 📋 技术栈
@@ -15,7 +16,7 @@
 | 组件 | 技术 |
 |------|------|
 | 后端 | Node.js + Express |
-| AI | 智谱 AI (GLM-4) |
+| AI | 智谱 AI (GLM-4.6V) |
 | 网页解析 | Cheerio |
 | 数据库 | SQLite (better-sqlite3) |
 | 存储 | Notion API |
@@ -45,3 +46,12 @@ capture-os/
 ├── set-admin.js       # 管理员设置工具
 └── .env               # 环境变量配置
 ```
+
+## 🌐 当前部署
+
+| 项目 | 信息 |
+|------|------|
+| 服务地址 | `https://lwsqdvsktvbg.cloud.sealos.io` |
+| AI 模型 | GLM-4.6V（视觉/文本） |
+| Notion 数据库 | `/database` |
+| 更新日期 | 2026-02-15 |
