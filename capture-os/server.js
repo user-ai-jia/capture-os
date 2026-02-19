@@ -295,6 +295,15 @@ async function createDatabaseForUser(accessToken) {
                             { name: "深度", color: "red" }
                         ]
                     }
+                },
+                "Status": {
+                    select: {
+                        options: [
+                            { name: "未开始", color: "default" },
+                            { name: "进行中", color: "blue" },
+                            { name: "已完成", color: "green" }
+                        ]
+                    }
                 }
             }
         }, { headers });
@@ -769,6 +778,9 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     },
                     "Difficulty": {
                         select: { name: aiResult.Difficulty || "入门" }
+                    },
+                    "Status": {
+                        select: { name: "未开始" }
                     }
                 },
                 children: pageBlocks
