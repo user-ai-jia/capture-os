@@ -236,6 +236,81 @@ async function searchDatabaseWithRetry(accessToken, maxRetries = 3, delayMs = 20
     return null;
 }
 
+// 自动创建数据库（当检测不到时，在用户授权的页面中创建）
+async function createDatabaseForUser(accessToken) {
+    const headers = {
+        'Authorization': `Bearer ${accessToken}`,
+        'Notion-Version': '2022-06-28',
+        'Content-Type': 'application/json'
+    };
+
+    try {
+        // 先找一个授权的页面作为父级
+        const searchRes = await axios.post('https://api.notion.com/v1/search', {
+            filter: { value: 'page', property: 'object' },
+            page_size: 5
+        }, { headers });
+
+        let parentId = null;
+
+        if (searchRes.data.results.length > 0) {
+            parentId = searchRes.data.results[0].id;
+            console.log(`[自动创建] 使用页面作为父级: ${parentId}`);
+        }
+
+        // 如果没有授权的页面，尝试直接在工作区创建（Notion API 支持）
+        const parentObj = parentId
+            ? { type: 'page_id', page_id: parentId }
+            : { type: 'workspace', workspace: true };
+
+        console.log(`[自动创建] 正在创建 Capture OS 数据库...`);
+
+        const dbRes = await axios.post('https://api.notion.com/v1/databases', {
+            parent: parentObj,
+            icon: { type: 'emoji', emoji: '📚' },
+            title: [{ type: 'text', text: { content: 'Capture OS' } }],
+            properties: {
+                "Name": { title: {} },
+                "URL": { url: {} },
+                "Type": {
+                    select: {
+                        options: [
+                            { name: "文章", color: "blue" },
+                            { name: "工具", color: "green" },
+                            { name: "灵感", color: "yellow" },
+                            { name: "资源", color: "purple" },
+                            { name: "观点", color: "orange" },
+                            { name: "教程", color: "pink" },
+                            { name: "视觉", color: "red" }
+                        ]
+                    }
+                },
+                "Tags": { multi_select: {} },
+                "Summary": { rich_text: {} },
+                "Difficulty": {
+                    select: {
+                        options: [
+                            { name: "入门", color: "green" },
+                            { name: "进阶", color: "yellow" },
+                            { name: "深度", color: "red" }
+                        ]
+                    }
+                },
+                "Status": { status: {} }
+            }
+        }, { headers });
+
+        const dbId = dbRes.data.id;
+        const dbTitle = dbRes.data.title?.[0]?.plain_text || 'Capture OS';
+        console.log(`[自动创建] ✅ 数据库创建成功: ${dbTitle} (${dbId})`);
+        return { id: dbId, title: dbTitle };
+
+    } catch (err) {
+        console.error(`[自动创建] ❌ 创建失败:`, err.response?.data || err.message);
+        return null;
+    }
+}
+
 // 3. 处理 Notion 回调（带重试 + 自动轮询兜底）
 app.get('/callback', async (req, res) => {
     const code = req.query.code;
@@ -270,8 +345,14 @@ app.get('/callback', async (req, res) => {
         userRepo.updateToken(licenseKey, accessToken);
         console.log(`[Callback] Token 已保存: ${licenseKey}`);
 
-        // 带重试的数据库自动检测（最多 5 次，每次间隔 2 秒）
-        const dbResult = await searchDatabaseWithRetry(accessToken, 5, 2000);
+        // 先尝试检测已有数据库（2 次快速重试）
+        let dbResult = await searchDatabaseWithRetry(accessToken, 2, 2000);
+
+        // 检测不到？自动创建一个！
+        if (!dbResult) {
+            console.log(`[Callback] 未检测到已有数据库，自动为用户创建...`);
+            dbResult = await createDatabaseForUser(accessToken);
+        }
 
         if (dbResult) {
             // ✅ 重试成功，直接显示成功页
@@ -365,7 +446,7 @@ app.get('/callback', async (req, res) => {
                         document.getElementById('status').textContent = '第 ' + attempt + ' 次检测中...';
 
                         try {
-                            const res = await fetch('/check-database?key=' + encodeURIComponent(key));
+                            const res = await fetch('/check-database?key=' + encodeURIComponent(key) + '&attempt=' + attempt);
                             const data = await res.json();
 
                             if (data.found) {
@@ -420,10 +501,18 @@ app.get('/check-database', async (req, res) => {
     }
 
     // 使用完整的搜索策略（单次不重试，轮询本身就是重试）
-    const dbResult = await searchDatabaseWithRetry(user.notion_token, 1, 0);
+    let dbResult = await searchDatabaseWithRetry(user.notion_token, 1, 0);
+
+    // 轮询第 5 次以上还没找到？直接自动创建
+    const attempt = parseInt(req.query.attempt) || 0;
+    if (!dbResult && attempt >= 5) {
+        console.log(`[轮询检测] 第 ${attempt} 次仍未找到，自动创建数据库...`);
+        dbResult = await createDatabaseForUser(user.notion_token);
+    }
+
     if (dbResult) {
         userRepo.updateDatabaseId(licenseKey, dbResult.id);
-        console.log(`[轮询检测] ✅ 找到数据库: ${dbResult.title} (${dbResult.id})`);
+        console.log(`[轮询检测] ✅ 数据库就绪: ${dbResult.title} (${dbResult.id})`);
         return res.json({ found: true, title: dbResult.title, database_id: dbResult.id });
     }
 
