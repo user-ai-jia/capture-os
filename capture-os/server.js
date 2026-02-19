@@ -122,54 +122,21 @@ app.get('/auth', authLimiter, (req, res) => {
 });
 
 // --------------------------------------------------
-// 辅助函数：深度数据库搜索（解决 Notion 内嵌数据库 + 索引延迟问题）
+// 辅助函数：全方位数据库搜索（解决各种 Notion 数据库类型检测问题）
 // --------------------------------------------------
 
-// 在授权的页面内部查找子数据库（解决内嵌数据库找不到的问题）
-async function findDatabaseInPages(accessToken) {
-    const headers = {
-        'Authorization': `Bearer ${accessToken}`,
-        'Notion-Version': '2022-06-28'
-    };
-
+// 尝试直接通过 Databases API 访问一个 ID，判断它是否是数据库
+async function tryAsDatabase(headers, id) {
     try {
-        // 第 1 步：搜索所有授权的页面
-        const searchRes = await axios.post('https://api.notion.com/v1/search', {
-            filter: { value: 'page', property: 'object' },
-            page_size: 10
-        }, { headers });
-
-        const pages = searchRes.data.results || [];
-        console.log(`[深度检测] 找到 ${pages.length} 个授权页面，逐个检查子数据库...`);
-
-        // 第 2 步：遍历每个页面，用 Blocks API 查找子数据库
-        for (const page of pages) {
-            const pageTitle = page.properties?.title?.title?.[0]?.plain_text || '未命名页面';
-            try {
-                const blocksRes = await axios.get(
-                    `https://api.notion.com/v1/blocks/${page.id}/children?page_size=100`,
-                    { headers }
-                );
-
-                for (const block of blocksRes.data.results) {
-                    if (block.type === 'child_database') {
-                        const dbTitle = block.child_database?.title || pageTitle;
-                        console.log(`[深度检测] ✅ 在页面「${pageTitle}」中找到子数据库: ${dbTitle} (${block.id})`);
-                        return { id: block.id, title: dbTitle };
-                    }
-                }
-            } catch (blockErr) {
-                console.log(`[深度检测] 读取页面「${pageTitle}」子块失败: ${blockErr.message}`);
-            }
-        }
-    } catch (err) {
-        console.log(`[深度检测] 页面搜索失败: ${err.message}`);
+        const res = await axios.get(`https://api.notion.com/v1/databases/${id}`, { headers });
+        const title = res.data.title?.[0]?.plain_text || '未命名';
+        return { id: res.data.id, title };
+    } catch (e) {
+        return null;
     }
-
-    return null;
 }
 
-// 完整的数据库检测：先搜顶级数据库，再搜页面内嵌数据库，带重试
+// 完整的数据库检测（3 种策略 + 重试）
 async function searchDatabaseWithRetry(accessToken, maxRetries = 3, delayMs = 2000) {
     const headers = {
         'Authorization': `Bearer ${accessToken}`,
@@ -177,30 +144,86 @@ async function searchDatabaseWithRetry(accessToken, maxRetries = 3, delayMs = 20
     };
 
     for (let i = 1; i <= maxRetries; i++) {
-        console.log(`[数据库检测] 第 ${i}/${maxRetries} 轮...`);
+        console.log(`[数据库检测] ===== 第 ${i}/${maxRetries} 轮 =====`);
 
-        // 策略 1：直接搜索顶级数据库
+        // 策略 1：无过滤器搜索，拿到所有授权对象，逐个检查是否是数据库
         try {
+            console.log(`[策略1] 无过滤器搜索所有授权对象...`);
             const searchRes = await axios.post('https://api.notion.com/v1/search', {
-                filter: { value: 'database', property: 'object' },
-                page_size: 5
+                page_size: 20
             }, { headers });
 
-            if (searchRes.data.results.length > 0) {
-                const dbId = searchRes.data.results[0].id;
-                const dbTitle = searchRes.data.results[0].title?.[0]?.plain_text || '未命名';
-                console.log(`[数据库检测] ✅ 策略1找到顶级数据库: ${dbTitle} (${dbId})`);
-                return { id: dbId, title: dbTitle };
+            const results = searchRes.data.results || [];
+            console.log(`[策略1] 搜索到 ${results.length} 个对象:`);
+
+            for (const item of results) {
+                const itemTitle = item.object === 'database'
+                    ? (item.title?.[0]?.plain_text || '未命名')
+                    : (item.properties?.title?.title?.[0]?.plain_text || '未命名');
+                console.log(`  - [${item.object}] ${itemTitle} (${item.id})`);
+
+                // 如果搜索结果本身就是 database 类型，直接返回
+                if (item.object === 'database') {
+                    console.log(`[策略1] ✅ 直接找到数据库: ${itemTitle} (${item.id})`);
+                    return { id: item.id, title: itemTitle };
+                }
+            }
+
+            // 搜索结果中没有 database 对象，尝试把每个 page 当作数据库访问
+            for (const item of results) {
+                if (item.object === 'page') {
+                    const dbResult = await tryAsDatabase(headers, item.id);
+                    if (dbResult) {
+                        console.log(`[策略1] ✅ 页面实际上是数据库: ${dbResult.title} (${dbResult.id})`);
+                        return dbResult;
+                    }
+                }
             }
         } catch (err) {
-            console.log(`[数据库检测] 策略1失败: ${err.message}`);
+            console.log(`[策略1] 搜索失败: ${err.message}`);
         }
 
-        // 策略 2：搜索页面内嵌的子数据库
-        const childDb = await findDatabaseInPages(accessToken);
-        if (childDb) {
-            console.log(`[数据库检测] ✅ 策略2找到内嵌数据库: ${childDb.title} (${childDb.id})`);
-            return childDb;
+        // 策略 2：遍历所有页面的子块，查找 child_database
+        try {
+            console.log(`[策略2] 搜索页面内嵌子数据库...`);
+            const pageRes = await axios.post('https://api.notion.com/v1/search', {
+                filter: { value: 'page', property: 'object' },
+                page_size: 10
+            }, { headers });
+
+            for (const page of (pageRes.data.results || [])) {
+                const pageTitle = page.properties?.title?.title?.[0]?.plain_text || '未命名';
+                try {
+                    const blocksRes = await axios.get(
+                        `https://api.notion.com/v1/blocks/${page.id}/children?page_size=100`,
+                        { headers }
+                    );
+
+                    const blocks = blocksRes.data.results || [];
+                    console.log(`  页面「${pageTitle}」含 ${blocks.length} 个子块: [${blocks.map(b => b.type).join(', ')}]`);
+
+                    for (const block of blocks) {
+                        // 检查 child_database 类型
+                        if (block.type === 'child_database') {
+                            const dbTitle = block.child_database?.title || pageTitle;
+                            console.log(`[策略2] ✅ 找到子数据库: ${dbTitle} (${block.id})`);
+                            return { id: block.id, title: dbTitle };
+                        }
+                        // 检查 child_page 类型（可能是全页面数据库）
+                        if (block.type === 'child_page') {
+                            const dbResult = await tryAsDatabase(headers, block.id);
+                            if (dbResult) {
+                                console.log(`[策略2] ✅ 子页面实际上是数据库: ${dbResult.title} (${dbResult.id})`);
+                                return dbResult;
+                            }
+                        }
+                    }
+                } catch (blockErr) {
+                    console.log(`  页面「${pageTitle}」子块读取失败: ${blockErr.message}`);
+                }
+            }
+        } catch (err) {
+            console.log(`[策略2] 失败: ${err.message}`);
         }
 
         // 等待后重试
@@ -209,6 +232,7 @@ async function searchDatabaseWithRetry(accessToken, maxRetries = 3, delayMs = 20
             await new Promise(resolve => setTimeout(resolve, delayMs));
         }
     }
+    console.log(`[数据库检测] ❌ 所有策略均未找到数据库`);
     return null;
 }
 
@@ -395,35 +419,12 @@ app.get('/check-database', async (req, res) => {
         return res.json({ found: true, title: '已绑定', database_id: user.database_id });
     }
 
-    const headers = {
-        'Authorization': `Bearer ${user.notion_token}`,
-        'Notion-Version': '2022-06-28'
-    };
-
-    // 策略 1：搜索顶级数据库
-    try {
-        const searchRes = await axios.post('https://api.notion.com/v1/search', {
-            filter: { value: 'database', property: 'object' },
-            page_size: 5
-        }, { headers });
-
-        if (searchRes.data.results.length > 0) {
-            const dbId = searchRes.data.results[0].id;
-            const dbTitle = searchRes.data.results[0].title?.[0]?.plain_text || '未命名';
-            userRepo.updateDatabaseId(licenseKey, dbId);
-            console.log(`[轮询检测] ✅ 策略1找到顶级数据库: ${dbTitle} (${dbId})`);
-            return res.json({ found: true, title: dbTitle, database_id: dbId });
-        }
-    } catch (err) {
-        console.log(`[轮询检测] 策略1失败: ${err.message}`);
-    }
-
-    // 策略 2：搜索页面内嵌的子数据库
-    const childDb = await findDatabaseInPages(user.notion_token);
-    if (childDb) {
-        userRepo.updateDatabaseId(licenseKey, childDb.id);
-        console.log(`[轮询检测] ✅ 策略2找到内嵌数据库: ${childDb.title} (${childDb.id})`);
-        return res.json({ found: true, title: childDb.title, database_id: childDb.id });
+    // 使用完整的搜索策略（单次不重试，轮询本身就是重试）
+    const dbResult = await searchDatabaseWithRetry(user.notion_token, 1, 0);
+    if (dbResult) {
+        userRepo.updateDatabaseId(licenseKey, dbResult.id);
+        console.log(`[轮询检测] ✅ 找到数据库: ${dbResult.title} (${dbResult.id})`);
+        return res.json({ found: true, title: dbResult.title, database_id: dbResult.id });
     }
 
     res.json({ found: false });
