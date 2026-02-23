@@ -113,6 +113,16 @@ function main() {
         console.log(`⚠️  重复跳过: ${duplicateCount} 次`);
     }
 
+    // 打印所有生成的密钥
+    console.log('');
+    console.log('========================================');
+    console.log('  📋 生成的密钥列表：');
+    console.log('========================================');
+    newKeys.forEach((key, i) => {
+        console.log(`  ${String(i + 1).padStart(3)}. ${key}`);
+    });
+    console.log('========================================');
+
     console.log('');
     console.log('👉 请下载 exports/ 目录下的 TXT 文件上传至发货后台');
     console.log('========================================');
