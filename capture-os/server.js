@@ -564,6 +564,16 @@ app.post('/capture', captureLimiter, async (req, res) => {
 
     if (!user.notion_token) return res.status(403).json({ error: "尚未绑定 Notion，请访问 /setup 页面进行配置" });
 
+    // 检查是否有实际内容
+    const { url, text } = req.body || {};
+    if (!url && !text) {
+        return res.status(400).json({
+            error: "未收到任何内容",
+            tip: "请从浏览器或 App 的「分享」菜单中使用快捷指令，而不是直接打开运行。",
+            usage: "在 Safari / 微信 / 小红书等 App 中 → 点击分享按钮 → 选择 Capture OS 快捷指令"
+        });
+    }
+
     res.status(200).json({ msg: "Capture OS Pro 已接收，正在后台处理..." });
 
     (async () => {
