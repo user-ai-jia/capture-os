@@ -617,6 +617,33 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 }
             }
 
+            // ===== 关卡 3：URL 去重（防连点） =====
+            if (payload.url && targetDbId) {
+                try {
+                    const dupCheck = await axios.post('https://api.notion.com/v1/databases/' + targetDbId + '/query', {
+                        filter: {
+                            property: 'URL',
+                            url: { equals: payload.url }
+                        },
+                        page_size: 1
+                    }, {
+                        headers: {
+                            'Authorization': `Bearer ${user.notion_token}`,
+                            'Notion-Version': '2022-06-28',
+                            'Content-Type': 'application/json'
+                        }
+                    });
+
+                    if (dupCheck.data.results.length > 0) {
+                        console.log(`[去重] URL 已存在，跳过: ${payload.url}`);
+                        return;
+                    }
+                } catch (dupErr) {
+                    console.log(`[去重检查跳过] ${dupErr.message}`);
+                    // 去重失败不阻塞主流程
+                }
+            }
+
             let contentToProcess = payload.text || '';
             if (payload.url) {
                 try {
@@ -640,6 +667,32 @@ app.post('/capture', captureLimiter, async (req, res) => {
 
                     // 清理多余空白
                     mainContent = mainContent.replace(/\s+/g, ' ').trim();
+
+                    // ===== 关卡 2：字数阈值熔断 =====
+                    if (mainContent.length < 50) {
+                        console.log(`[熔断] 内容仅 ${mainContent.length} 字符，疑似被反爬/付费墙拦截`);
+                        // 不调用 AI，直接写入降级记录到 Notion
+                        await axios.post('https://api.notion.com/v1/pages', {
+                            parent: { database_id: targetDbId },
+                            icon: { type: 'emoji', emoji: '⚠️' },
+                            properties: {
+                                "Name": { title: [{ text: { content: "⚠️ 内容被平台拦截" } }] },
+                                "URL": { url: payload.url },
+                                "Type": { select: { name: "资源" } },
+                                "Tags": { multi_select: [{ name: "抓取失败" }] },
+                                "Summary": { rich_text: [{ text: { content: "该链接的正文无法抓取（可能是反爬、付费墙或需要登录），请手动阅读原文。" } }] },
+                                "Status": { select: { name: "未开始" } }
+                            }
+                        }, {
+                            headers: {
+                                'Authorization': `Bearer ${user.notion_token}`,
+                                'Notion-Version': '2022-06-28',
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        console.log(`[熔断写入成功] 已保存降级记录: ${payload.url}`);
+                        return;
+                    }
 
                     // 截取前 6000 字符（纯文本信息密度远高于 HTML）
                     contentToProcess = `[URL]: ${payload.url}\n[正文内容]:\n${mainContent.substring(0, 6000)}`;
@@ -805,7 +858,35 @@ app.post('/capture', captureLimiter, async (req, res) => {
             console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title}`);
 
         } catch (err) {
-            console.error("[后台处理严重错误]", err.response?.data || err.message);
+            const errMsg = err.response?.data?.message || err.response?.data || err.message;
+            console.error("[后台处理错误]", errMsg);
+
+            // ===== 关卡 4：AI 敏感词降级 =====
+            if (err.response?.status === 400 && targetDbId) {
+                try {
+                    await axios.post('https://api.notion.com/v1/pages', {
+                        parent: { database_id: targetDbId },
+                        icon: { type: 'emoji', emoji: '🚫' },
+                        properties: {
+                            "Name": { title: [{ text: { content: "🚫 AI 拒绝处理此内容" } }] },
+                            "URL": { url: payload.url || null },
+                            "Type": { select: { name: "资源" } },
+                            "Tags": { multi_select: [{ name: "审核拦截" }] },
+                            "Summary": { rich_text: [{ text: { content: "内容可能涉及敏感话题，AI 审核未通过。请手动阅读原文。" } }] },
+                            "Status": { select: { name: "未开始" } }
+                        }
+                    }, {
+                        headers: {
+                            'Authorization': `Bearer ${user.notion_token}`,
+                            'Notion-Version': '2022-06-28',
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    console.log(`[降级写入] AI 拒绝处理，已保存降级记录`);
+                } catch (notionErr) {
+                    console.error(`[降级写入失败]`, notionErr.message);
+                }
+            }
         }
     })();
 });
