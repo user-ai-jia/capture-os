@@ -310,6 +310,18 @@ async function createDatabaseForUser(accessToken) {
                 },
                 "Tags": { multi_select: {} },
                 "Summary": { rich_text: {} },
+                "Author": { rich_text: {} },
+                "Platform": {
+                    select: {
+                        options: [
+                            { name: "微信公众号", color: "green" },
+                            { name: "小红书", color: "red" },
+                            { name: "抖音", color: "default" },
+                            { name: "知乎", color: "blue" },
+                            { name: "其他", color: "gray" }
+                        ]
+                    }
+                },
                 "Difficulty": {
                     select: {
                         options: [
@@ -684,6 +696,36 @@ app.post('/capture', captureLimiter, async (req, res) => {
             }
 
             let contentToProcess = payload.text || '';
+            let rawOriginalText = ''; // 保存原文用于 Notion 展示
+
+            // ===== D6：短链解析 =====
+            if (payload.url) {
+                try {
+                    const resolved = await axios.head(payload.url, {
+                        maxRedirects: 5,
+                        timeout: 5000,
+                        headers: { 'User-Agent': 'Mozilla/5.0' }
+                    });
+                    const finalUrl = resolved.request?.res?.responseUrl || resolved.request?._redirectable?._currentUrl || payload.url;
+                    if (finalUrl !== payload.url) {
+                        console.log(`[短链解析] ${payload.url} -> ${finalUrl}`);
+                        payload.url = finalUrl;
+                    }
+                } catch (e) {
+                    console.log(`[短链解析跳过] ${e.message}`);
+                }
+            }
+
+            // 识别来源平台
+            let platform = '其他';
+            if (payload.url) {
+                const u = payload.url.toLowerCase();
+                if (u.includes('weixin') || u.includes('mp.weixin') || u.includes('wechat')) platform = '微信公众号';
+                else if (u.includes('xiaohongshu') || u.includes('xhslink') || u.includes('xhs')) platform = '小红书';
+                else if (u.includes('douyin') || u.includes('tiktok')) platform = '抖音';
+                else if (u.includes('zhihu')) platform = '知乎';
+            }
+
             if (payload.url) {
                 try {
                     const pageRes = await axios.get(payload.url, {
@@ -735,12 +777,15 @@ app.post('/capture', captureLimiter, async (req, res) => {
 
                     // 截取前 6000 字符（纯文本信息密度远高于 HTML）
                     contentToProcess = `[URL]: ${payload.url}\n[正文内容]:\n${mainContent.substring(0, 6000)}`;
+                    rawOriginalText = mainContent.substring(0, 3000); // 保存原文前 3000 字
                     console.log(`[抓取成功] 提取纯文本 ${mainContent.length} 字符`);
                 } catch (e) {
                     console.error("抓取失败:", e.message);
                     contentToProcess = `[URL]: ${payload.url}\n(网页抓取失败，请根据 URL 地址推测内容进行分析)`;
                 }
             }
+
+            const startTime = Date.now();
 
             const client = new OpenAI({
                 apiKey: ZHIPU_API_KEY,
@@ -757,13 +802,14 @@ app.post('/capture', captureLimiter, async (req, res) => {
 请返回以下 JSON 字段：
 
 1. "Title": 简短有力的中文标题（10-20字，要有吸引力）
-2. "Summary": 深度中文摘要（100-200字），要涵盖核心论点、关键数据和主要结论
-3. "Tags": 3-5 个精准标签（数组格式，中文）
-4. "Category": 从 ["文章", "工具", "灵感", "资源", "观点", "教程", "视觉"] 中选择最匹配的一个
-5. "KeyInsight": 最核心的一句话洞察/金句（20-40字，一句话说清这篇内容最有价值的点）
-6. "Difficulty": 从 ["入门", "进阶", "深度"] 中选择内容的难度等级。判断标准：入门=科普新闻、基础教程、无专业术语；进阶=需要行业背景、涉及专业框架或方法论；深度=学术研究、技术底层原理、专家级深度分析
-7. "ActionItems": 2-3 个可执行的行动要点（数组格式，每条 15-30 字，以动词开头）
-8. "Emoji": 选择 1 个最能代表这篇内容主题的 emoji 符号
+2. "Author": 内容作者/来源（从正文中提取，找不到写"未知"）
+3. "Summary": 深度中文摘要（200-400字），要涵盖：核心论点、关键数据、主要结论、方法论框架。如果是学术论文或期刊文章，还应包含研究方法和数据支撑
+4. "Tags": 3-5 个精准标签（数组格式，中文）
+5. "Category": 从 ["文章", "工具", "灵感", "资源", "观点", "教程", "视觉"] 中选择最匹配的一个
+6. "KeyInsight": 最核心的一句话洞察/金句（20-40字）
+7. "Difficulty": 从 ["入门", "进阶", "深度"] 中选择。判断标准：入门=科普新闻、基础教程；进阶=需行业背景、涉及专业框架；深度=学术研究、技术底层、期刊论文、含参考文献
+8. "ActionItems": 2-3 个可执行的行动要点（数组格式，每条 15-30 字，以动词开头）
+9. "Emoji": 选择 1 个最能代表内容主题的 emoji
 
 请务必只返回纯 JSON 格式数据，不要包含 Markdown 代码块标记。`
                     },
@@ -771,6 +817,8 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 ],
                 response_format: undefined  // glm-4.6v 视觉模型不支持 json_object 模式
             });
+
+            const aiTime = Date.now() - startTime;
 
             const rawContent = completion.choices[0].message.content;
             console.log(`[AI 原始返回] ${rawContent.substring(0, 200)}...`);
@@ -856,6 +904,31 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 });
             }
 
+            // 📄 原文内容（可折叠）
+            if (rawOriginalText && rawOriginalText.length > 50) {
+                pageBlocks.push({ object: 'block', type: 'divider', divider: {} });
+                // Notion toggle block 内嵌段落
+                const textChunks = [];
+                // Notion rich_text 每段最多 2000 字符
+                for (let i = 0; i < rawOriginalText.length; i += 2000) {
+                    textChunks.push({
+                        object: 'block',
+                        type: 'paragraph',
+                        paragraph: {
+                            rich_text: [{ type: 'text', text: { content: rawOriginalText.substring(i, i + 2000) } }]
+                        }
+                    });
+                }
+                pageBlocks.push({
+                    object: 'block',
+                    type: 'toggle',
+                    toggle: {
+                        rich_text: [{ type: 'text', text: { content: '📄 展开原文内容' } }],
+                        children: textChunks
+                    }
+                });
+            }
+
             // 选择页面 icon emoji
             const pageEmoji = aiResult.Emoji || '📝';
 
@@ -878,6 +951,12 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     "Summary": {
                         rich_text: [{ text: { content: (aiResult.Summary || "").substring(0, 2000) } }]
                     },
+                    "Author": {
+                        rich_text: [{ text: { content: (aiResult.Author || "未知").substring(0, 100) } }]
+                    },
+                    "Platform": {
+                        select: { name: platform }
+                    },
                     "Difficulty": {
                         select: { name: aiResult.Difficulty || "入门" }
                     },
@@ -894,7 +973,7 @@ app.post('/capture', captureLimiter, async (req, res) => {
                 }
             });
 
-            console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title}`);
+            console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title} | AI耗时: ${aiTime}ms | 平台: ${platform}`);
 
         } catch (err) {
             const errMsg = err.response?.data?.message || err.response?.data || err.message;
@@ -928,6 +1007,38 @@ app.post('/capture', captureLimiter, async (req, res) => {
             }
         }
     })();
+});
+
+// ==================================================
+// 模块 3：用户面板 API（D2）
+// ==================================================
+app.get('/api/usage', (req, res) => {
+    const licenseKey = req.query.key ? req.query.key.trim() : null;
+    if (!licenseKey) {
+        return res.status(400).json({ error: '请提供密钥参数 ?key=YOUR_KEY' });
+    }
+
+    const user = userRepo.findByKey(licenseKey);
+    if (!user) {
+        return res.status(404).json({ error: '密钥无效' });
+    }
+
+    const isVip = userRepo.isAdmin(user);
+    const todayUsed = getDailyUsage(licenseKey);
+
+    res.json({
+        key: licenseKey.substring(0, 8) + '****', // 脱敏
+        status: user.status,
+        role: isVip ? '管理员' : '普通用户',
+        notion_bound: user.connected,
+        database_id: user.database_id ? user.database_id.substring(0, 8) + '...' : null,
+        today: {
+            used: todayUsed,
+            limit: isVip ? '无限制' : DAILY_LIMIT,
+            remaining: isVip ? '无限制' : Math.max(0, DAILY_LIMIT - todayUsed)
+        },
+        created_at: user.created_at
+    });
 });
 
 app.listen(PORT, () => {
