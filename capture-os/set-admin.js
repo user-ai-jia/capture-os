@@ -1,47 +1,27 @@
 /**
- * set-admin.js - 设置超级管理员
+ * set-admin.js - 管理员说明
  * 
- * 使用方法：node set-admin.js
+ * 管理员判断已改为通过密钥前缀自动识别：
+ * - VIP- 开头 = 超级管理员（跳过限速、跳过过期检查）
+ * - CAP- 开头 = 普通用户
  * 
- * 只将 vip-888 设置为超级管理员，其他用户全部降为普通用户
+ * 此脚本不再需要手动执行。保留仅作说明用途。
  */
 
 const userRepo = require('./db/userRepo');
 
 console.log('========================================');
-console.log('  🔐 设置超级管理员');
+console.log('  🔐 管理员识别规则');
 console.log('========================================\n');
+console.log('  VIP-xxxx = 超级管理员（自动识别，无需手动设置）');
+console.log('  CAP-xxxx = 普通用户');
+console.log('');
 
-const ADMIN_KEYS = ['vip-888'];
-
-// 先把所有用户降为普通用户
 const allUsers = userRepo.getAll();
-for (const user of allUsers) {
-    if (!ADMIN_KEYS.includes(user.license_key)) {
-        userRepo.setAdmin(user.license_key, false);
-    }
-}
-console.log(`[UserRepo] 已重置 ${allUsers.length - ADMIN_KEYS.length} 个用户的管理员权限`);
+allUsers.forEach(u => {
+    const role = u.license_key.toUpperCase().startsWith('VIP') ? '👑 管理员' : '👤 普通';
+    console.log(`  ${role} | ${u.license_key} | ${u.status}`);
+});
 
-// 再设置指定用户为管理员
-let updated = 0;
-for (const key of ADMIN_KEYS) {
-    const user = userRepo.findByKey(key);
-    if (user) {
-        userRepo.setAdmin(key, true);
-        console.log(`[UserRepo] 设置管理员: ${key}`);
-        updated++;
-    } else {
-        console.log(`[UserRepo] ⚠️ 未找到用户: ${key}`);
-    }
-}
-
-console.log('');
-console.log('========================================');
-console.log(`✅ 完成！共设置 ${updated} 个管理员`);
-console.log('========================================');
-console.log('');
-console.log('管理员权限：');
-console.log('  - 跳过 API 限速');
-console.log('  - 跳过过期检查');
+console.log(`\n  共 ${allUsers.length} 个密钥`);
 console.log('========================================');

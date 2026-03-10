@@ -48,11 +48,8 @@ const BASE_URL = RAW_BASE_URL.trim().replace(/\/$/, "");
 // 管理员跳过限速的检查函数
 const skipIfAdmin = (req, res) => {
     const key = req.query.key || req.headers['authorization']?.replace('Bearer ', '').trim();
-    if (key) {
-        const user = userRepo.findByKey(key);
-        if (user && user.is_admin) {
-            return true; // 管理员跳过限速
-        }
+    if (key && key.toUpperCase().startsWith('VIP')) {
+        return true; // VIP 前缀 = 管理员，跳过限速
     }
     return false;
 };
@@ -68,12 +65,38 @@ const authLimiter = rateLimit({
 
 const captureLimiter = rateLimit({
     windowMs: 60 * 1000, // 1 分钟
-    max: 30, // 每 IP 最多 30 次
+    max: 5, // 每 IP 最多 5 次（防连点）
     message: { error: '请求过于频繁，请稍后再试' },
     standardHeaders: true,
     legacyHeaders: false,
     skip: skipIfAdmin, // 管理员跳过
 });
+
+// --------------------------------------------------
+// 按 Key 每日限额（S3）
+// --------------------------------------------------
+const DAILY_LIMIT = 20;
+const dailyUsage = new Map(); // key -> { date: 'YYYY-MM-DD', count: N }
+
+function getDailyUsage(licenseKey) {
+    const today = new Date().toISOString().slice(0, 10);
+    const record = dailyUsage.get(licenseKey);
+    if (!record || record.date !== today) {
+        dailyUsage.set(licenseKey, { date: today, count: 0 });
+        return 0;
+    }
+    return record.count;
+}
+
+function incrementDailyUsage(licenseKey) {
+    const today = new Date().toISOString().slice(0, 10);
+    const record = dailyUsage.get(licenseKey);
+    if (!record || record.date !== today) {
+        dailyUsage.set(licenseKey, { date: today, count: 1 });
+    } else {
+        record.count++;
+    }
+}
 
 // ==================================================
 // 模块 1：前端与授权
@@ -562,6 +585,19 @@ app.post('/capture', captureLimiter, async (req, res) => {
         return res.status(403).json({ error: "License Key 已过期，请续费" });
     }
 
+    // 每日限额检查（管理员跳过）
+    if (!userRepo.isAdmin(user)) {
+        const used = getDailyUsage(licenseKey);
+        if (used >= DAILY_LIMIT) {
+            return res.status(429).json({
+                error: "今日额度已用完",
+                used: used,
+                limit: DAILY_LIMIT,
+                tip: "每日额度将在次日零点重置"
+            });
+        }
+    }
+
     if (!user.notion_token) return res.status(403).json({ error: "尚未绑定 Notion，请访问 /setup 页面进行配置" });
 
     // 检查是否有实际内容
@@ -573,6 +609,9 @@ app.post('/capture', captureLimiter, async (req, res) => {
             usage: "在 Safari / 微信 / 小红书等 App 中 → 点击分享按钮 → 选择 Capture OS 快捷指令"
         });
     }
+
+    // 计入每日用量
+    incrementDailyUsage(licenseKey);
 
     res.status(200).json({ msg: "Capture OS Pro 已接收，正在后台处理..." });
 

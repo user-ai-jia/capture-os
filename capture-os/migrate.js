@@ -53,11 +53,16 @@ const result = userRepo.bulkInsert(users);
 if (result.success) {
     console.log(`✅ 迁移完成！成功导入 ${result.inserted} 条用户记录`);
     console.log(`\n📊 数据库当前状态: 共 ${userRepo.count()} 位用户`);
+
+    // 迁移成功后重命名源文件，防止重复执行
+    const doneFile = JSON_FILE + '.done';
+    fs.renameSync(JSON_FILE, doneFile);
+    console.log(`\n📁 已将 users.json 重命名为 users.json.done（防止重复迁移）`);
 } else {
     console.log('❌ 迁移失败');
     process.exit(1);
 }
 
 console.log('\n================================================');
-console.log('  迁移完成！原 users.json 文件已保留作为备份');
+console.log('  迁移完成！');
 console.log('================================================');

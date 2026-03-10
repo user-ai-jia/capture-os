@@ -264,11 +264,13 @@ function setFirstNAsAdmin(n) {
 
 /**
  * 检查用户是否为管理员
+ * 通过密钥前缀判断：VIP- 开头 = 管理员，CAP- 开头 = 普通用户
  * @param {object} user 用户对象
  * @returns {boolean}
  */
 function isAdmin(user) {
-    return user && user.is_admin === true;
+    if (!user || !user.license_key) return false;
+    return user.license_key.toUpperCase().startsWith('VIP');
 }
 
 /**
