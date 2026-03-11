@@ -109,6 +109,32 @@ function incrementDailyUsage(licenseKey) {
 }
 
 // ==================================================
+// 请求日志（内存，最近 100 条）
+// ==================================================
+const requestLog = [];
+const MAX_LOG_SIZE = 100;
+
+function addLog(entry) {
+    requestLog.unshift({
+        time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+        timestamp: Date.now(),
+        ...entry
+    });
+    if (requestLog.length > MAX_LOG_SIZE) requestLog.pop();
+}
+
+// 管理员鉴权中间件
+function requireAdmin(req, res, next) {
+    const key = req.query.key ? req.query.key.trim() : '';
+    if (!key || !key.toUpperCase().startsWith('VIP')) {
+        return res.status(403).json({ error: '需要管理员权限' });
+    }
+    const user = userRepo.findByKey(key);
+    if (!user) return res.status(403).json({ error: '密钥无效' });
+    next();
+}
+
+// ==================================================
 // 模块 1：前端与授权
 // ==================================================
 
@@ -1005,10 +1031,25 @@ app.post('/capture', captureLimiter, async (req, res) => {
             });
 
             console.log(`[任务成功] 已写入笔记: ${pageEmoji} ${aiResult.Title} | AI耗时: ${aiTime}ms | 平台: ${platform}`);
+            addLog({
+                type: videoTranscript ? 'video' : 'success',
+                key: user.license_key.substring(0, 12) + '...',
+                title: aiResult.Title || '',
+                url: (payload.url || '').substring(0, 60),
+                platform,
+                ai_time: aiTime
+            });
 
         } catch (err) {
             const errMsg = err.response?.data?.message || err.response?.data || err.message;
             console.error("[后台处理错误]", errMsg);
+            addLog({
+                type: 'error',
+                key: user.license_key.substring(0, 12) + '...',
+                url: (payload.url || '').substring(0, 60),
+                platform,
+                error: String(errMsg).substring(0, 100)
+            });
 
             // ===== 关卡 4：AI 敏感词降级 =====
             if (err.response?.status === 400 && targetDbId) {
@@ -1070,6 +1111,57 @@ app.get('/api/usage', (req, res) => {
         },
         created_at: user.created_at
     });
+});
+
+// ==================================================
+// 模块 4：管理员后台 API（D3）
+// ==================================================
+
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/api/admin/stats', requireAdmin, (req, res) => {
+    const today = new Date().toISOString().slice(0, 10);
+    let todayTotal = 0;
+    dailyUsage.forEach((v) => { if (v.date === today) todayTotal += v.count; });
+
+    const todayLogs = requestLog.filter(l => {
+        const logDate = new Date(l.timestamp).toISOString().slice(0, 10);
+        return logDate === today;
+    });
+
+    let puppeteerReady = false;
+    try { require('puppeteer'); puppeteerReady = true; } catch { }
+
+    res.json({
+        total_users: userRepo.count(),
+        active_users: userRepo.countByStatus('active'),
+        unused_keys: userRepo.countByStatus('unused'),
+        today_requests: todayTotal,
+        today_success: todayLogs.filter(l => l.type === 'success').length,
+        today_errors: todayLogs.filter(l => l.type === 'error').length,
+        today_videos: todayLogs.filter(l => l.type === 'video').length,
+        asr_enabled: ASR_ENABLED,
+        puppeteer_ready: puppeteerReady
+    });
+});
+
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+    const users = userRepo.getAll();
+    const result = users.map(u => ({
+        key: u.license_key,
+        is_admin: userRepo.isAdmin(u),
+        status: u.status,
+        notion_bound: u.connected,
+        today_used: getDailyUsage(u.license_key),
+        created_at: u.created_at
+    }));
+    res.json(result);
+});
+
+app.get('/api/admin/logs', requireAdmin, (req, res) => {
+    res.json(requestLog.slice(0, 50));
 });
 
 app.listen(PORT, () => {

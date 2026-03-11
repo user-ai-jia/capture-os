@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Capture OS | 管理后台</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            min-height: 100vh;
+        }
+
+        /* ===== 顶栏 ===== */
+        .topbar {
+            background: #fff;
+            border-bottom: 1px solid #e5e5e7;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .topbar h1 {
+            font-size: 18px;
+            font-weight: 700;
+        }
+
+        .topbar h1 span {
+            color: #6366f1;
+        }
+
+        .topbar-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            color: #86868b;
+        }
+
+        .topbar-right .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #34c759;
+            display: inline-block;
+        }
+
+        /* ===== 主体 ===== */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* ===== 统计卡片 ===== */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: #fff;
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid #e5e5e7;
+        }
+
+        .stat-card .label {
+            font-size: 12px;
+            color: #86868b;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            margin: 4px 0;
+            color: #1d1d1f;
+        }
+
+        .stat-card .sub {
+            font-size: 12px;
+            color: #86868b;
+        }
+
+        .stat-card.purple .value {
+            color: #6366f1;
+        }
+
+        .stat-card.green .value {
+            color: #34c759;
+        }
+
+        .stat-card.orange .value {
+            color: #ff9500;
+        }
+
+        .stat-card.blue .value {
+            color: #007aff;
+        }
+
+        /* ===== 面板 ===== */
+        .panel {
+            background: #fff;
+            border-radius: 16px;
+            border: 1px solid #e5e5e7;
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #e5e5e7;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .panel-header h2 {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .panel-header .badge {
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 600;
+        }
+
+        /* ===== 表格 ===== */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 16px;
+            font-weight: 600;
+            color: #86868b;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #e5e5e7;
+        }
+
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #f0f0f2;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background: #fafafc;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-active {
+            background: #e8faf0;
+            color: #059669;
+        }
+
+        .badge-unused {
+            background: #fef3c7;
+            color: #d97706;
+        }
+
+        .badge-admin {
+            background: #ede9fe;
+            color: #7c3aed;
+        }
+
+        .badge-normal {
+            background: #f0f0f2;
+            color: #86868b;
+        }
+
+        .badge-bound {
+            background: #e8faf0;
+            color: #059669;
+        }
+
+        .badge-unbound {
+            background: #fef2f2;
+            color: #dc2626;
+        }
+
+        .key-text {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            color: #1d1d1f;
+        }
+
+        .platform-tag {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 6px;
+            background: #f0f0f2;
+            color: #555;
+            margin-right: 2px;
+        }
+
+        /* ===== 日志 ===== */
+        .log-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .log-item {
+            padding: 10px 16px;
+            border-bottom: 1px solid #f0f0f2;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .log-item:hover {
+            background: #fafafc;
+        }
+
+        .log-time {
+            color: #86868b;
+            font-family: monospace;
+            font-size: 11px;
+            white-space: nowrap;
+            min-width: 70px;
+        }
+
+        .log-icon {
+            font-size: 14px;
+        }
+
+        .log-msg {
+            flex: 1;
+            word-break: break-all;
+        }
+
+        .log-item.success .log-icon::before {
+            content: '✅';
+        }
+
+        .log-item.error .log-icon::before {
+            content: '❌';
+        }
+
+        .log-item.video .log-icon::before {
+            content: '🎬';
+        }
+
+        .log-item.info .log-icon::before {
+            content: '📝';
+        }
+
+        /* ===== 登录 ===== */
+        .login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #f5f5f7;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+
+        .login-box {
+            background: #fff;
+            border-radius: 20px;
+            padding: 40px;
+            width: 380px;
+            border: 1px solid #e5e5e7;
+            text-align: center;
+        }
+
+        .login-box h2 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .login-box p {
+            color: #86868b;
+            font-size: 13px;
+            margin-bottom: 20px;
+        }
+
+        .login-box input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #e5e5e7;
+            border-radius: 12px;
+            font-size: 14px;
+            outline: none;
+            font-family: monospace;
+        }
+
+        .login-box input:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        .login-box button {
+            width: 100%;
+            margin-top: 12px;
+            padding: 12px;
+            background: #1d1d1f;
+            color: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .login-box button:hover {
+            background: #333;
+        }
+
+        .login-error {
+            color: #dc2626;
+            font-size: 12px;
+            margin-top: 8px;
+            display: none;
+        }
+
+        .empty-state {
+            padding: 40px;
+            text-align: center;
+            color: #86868b;
+            font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .container {
+                padding: 16px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 登录 -->
+    <div id="loginOverlay" class="login-overlay">
+        <div class="login-box">
+            <h2>🔐 管理后台</h2>
+            <p>仅限 VIP 密钥登录</p>
+            <input type="text" id="adminKeyInput" placeholder="输入管理员密钥" autocomplete="off">
+            <button onclick="adminLogin()">验证身份</button>
+            <p class="login-error" id="loginError">密钥无效或无管理员权限</p>
+        </div>
+    </div>
+
+    <!-- 顶栏 -->
+    <div class="topbar">
+        <h1>⚡ Capture <span>OS</span> 管理后台</h1>
+        <div class="topbar-right">
+            <span class="live-dot"></span> 系统运行中
+            <span id="refreshTime">-</span>
+            <button onclick="loadAll()"
+                style="padding:4px 12px; border:1px solid #e5e5e7; background:#fff; border-radius:8px; cursor:pointer; font-size:12px;">刷新</button>
+            <button onclick="adminLogout()"
+                style="padding:4px 12px; border:1px solid #e5e5e7; background:#fff; border-radius:8px; cursor:pointer; font-size:12px; color:#dc2626;">退出</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 统计卡片 -->
+        <div class="stats-grid">
+            <div class="stat-card purple">
+                <div class="label">用户总数</div>
+                <div class="value" id="totalUsers">-</div>
+                <div class="sub" id="userBreakdown">-</div>
+            </div>
+            <div class="stat-card green">
+                <div class="label">今日请求</div>
+                <div class="value" id="todayRequests">-</div>
+                <div class="sub" id="todaySub">-</div>
+            </div>
+            <div class="stat-card orange">
+                <div class="label">今日视频</div>
+                <div class="value" id="todayVideos">-</div>
+                <div class="sub">含 ASR 转写</div>
+            </div>
+            <div class="stat-card blue">
+                <div class="label">系统状态</div>
+                <div class="value" style="font-size:20px" id="sysStatus">-</div>
+                <div class="sub" id="sysSub">-</div>
+            </div>
+        </div>
+
+        <!-- 用户表 -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2>👥 用户列表</h2>
+                <span class="badge" style="background:#f0f0f2;color:#555" id="userCountBadge">0 人</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>密钥</th>
+                            <th>角色</th>
+                            <th>状态</th>
+                            <th>Notion</th>
+                            <th>今日用量</th>
+                            <th>注册时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userTableBody">
+                        <tr>
+                            <td colspan="6" class="empty-state">加载中...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 最近请求日志 -->
+        <div class="panel">
+            <div class="panel-header">
+                <h2>📋 最近请求</h2>
+                <span class="badge" style="background:#f0f0f2;color:#555" id="logCountBadge">0 条</span>
+            </div>
+            <div class="log-list" id="logList">
+                <div class="empty-state">暂无请求记录</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ADMIN_KEY_STORAGE = 'capture_os_admin_key';
+        let adminKey = '';
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const saved = localStorage.getItem(ADMIN_KEY_STORAGE);
+            if (saved) {
+                adminKey = saved;
+                verifyAdmin(saved);
+            }
+            document.getElementById('adminKeyInput').addEventListener('keydown', e => {
+                if (e.key === 'Enter') adminLogin();
+            });
+        });
+
+        async function adminLogin() {
+            const key = document.getElementById('adminKeyInput').value.trim();
+            if (!key) return;
+
+            const ok = await verifyAdmin(key);
+            if (!ok) {
+                document.getElementById('loginError').style.display = 'block';
+            }
+        }
+
+        async function verifyAdmin(key) {
+            try {
+                const res = await fetch(`/api/admin/stats?key=${encodeURIComponent(key)}`);
+                if (!res.ok) return false;
+
+                adminKey = key;
+                localStorage.setItem(ADMIN_KEY_STORAGE, key);
+                document.getElementById('loginOverlay').style.display = 'none';
+                loadAll();
+                return true;
+            } catch {
+                return false;
+            }
+        }
+
+        function adminLogout() {
+            localStorage.removeItem(ADMIN_KEY_STORAGE);
+            location.reload();
+        }
+
+        async function loadAll() {
+            const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            document.getElementById('refreshTime').textContent = ts;
+
+            try {
+                const [statsRes, usersRes, logsRes] = await Promise.all([
+                    fetch(`/api/admin/stats?key=${encodeURIComponent(adminKey)}`),
+                    fetch(`/api/admin/users?key=${encodeURIComponent(adminKey)}`),
+                    fetch(`/api/admin/logs?key=${encodeURIComponent(adminKey)}`)
+                ]);
+
+                if (statsRes.ok) renderStats(await statsRes.json());
+                if (usersRes.ok) renderUsers(await usersRes.json());
+                if (logsRes.ok) renderLogs(await logsRes.json());
+            } catch (e) {
+                console.error('加载失败', e);
+            }
+        }
+
+        function renderStats(data) {
+            document.getElementById('totalUsers').textContent = data.total_users;
+            document.getElementById('userBreakdown').textContent = `${data.active_users} 已激活 · ${data.unused_keys} 未使用`;
+            document.getElementById('todayRequests').textContent = data.today_requests;
+            document.getElementById('todaySub').textContent = `成功 ${data.today_success} · 失败 ${data.today_errors}`;
+            document.getElementById('todayVideos').textContent = data.today_videos;
+            document.getElementById('sysStatus').textContent = data.puppeteer_ready ? '✅ 正常' : '⚠️ 部分';
+            document.getElementById('sysSub').textContent = `ASR: ${data.asr_enabled ? '✅' : '❌'}  Puppeteer: ${data.puppeteer_ready ? '✅' : '❌'}`;
+        }
+
+        function renderUsers(users) {
+            document.getElementById('userCountBadge').textContent = users.length + ' 人';
+            const tbody = document.getElementById('userTableBody');
+
+            if (!users.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-state">暂无用户</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = users.map(u => `
+        <tr>
+            <td class="key-text">${u.key}</td>
+            <td><span class="badge ${u.is_admin ? 'badge-admin' : 'badge-normal'}">${u.is_admin ? '👑 管理员' : '普通'}</span></td>
+            <td><span class="badge ${u.status === 'active' ? 'badge-active' : 'badge-unused'}">${u.status === 'active' ? '已激活' : '未使用'}</span></td>
+            <td><span class="badge ${u.notion_bound ? 'badge-bound' : 'badge-unbound'}">${u.notion_bound ? '已绑定' : '未绑定'}</span></td>
+            <td>${u.today_used}</td>
+            <td style="color:#86868b">${u.created_at ? u.created_at.substring(0, 10) : '-'}</td>
+        </tr>
+    `).join('');
+        }
+
+        function renderLogs(logs) {
+            document.getElementById('logCountBadge').textContent = logs.length + ' 条';
+            const list = document.getElementById('logList');
+
+            if (!logs.length) {
+                list.innerHTML = '<div class="empty-state">暂无请求记录</div>';
+                return;
+            }
+
+            list.innerHTML = logs.map(log => `
+        <div class="log-item ${log.type}">
+            <span class="log-time">${log.time}</span>
+            <span class="log-icon"></span>
+            <span class="log-msg">
+                <strong>${log.key}</strong> ${log.title || log.url || ''}
+                ${log.platform ? `<span class="platform-tag">${log.platform}</span>` : ''}
+                ${log.ai_time ? `<span style="color:#86868b;font-size:11px"> · AI ${log.ai_time}ms</span>` : ''}
+                ${log.error ? `<span style="color:#dc2626;font-size:12px"> · ${log.error}</span>` : ''}
+            </span>
+        </div>
+    `).join('');
+        }
+
+        // 自动刷新 30 秒
+        setInterval(loadAll, 30000);
+    </script>
+</body>
+
+</html>
