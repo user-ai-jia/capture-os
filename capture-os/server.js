@@ -17,9 +17,19 @@ const OpenAI = require('openai');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const cheerio = require('cheerio');
+const videoHandler = require('./lib/videoHandler');
 
 // 引入数据库模块（替换原有的 JSON 文件操作）
 const userRepo = require('./db/userRepo');
+
+// 讯飞 ASR 配置
+const asrConfig = {
+    appId: process.env.XFYUN_APP_ID || '',
+    apiKey: process.env.XFYUN_API_KEY || '',
+    apiSecret: process.env.XFYUN_API_SECRET || ''
+};
+const ASR_ENABLED = !!(asrConfig.appId && asrConfig.apiKey && asrConfig.apiSecret);
+console.log(`[ASR] 讯飞语音转写: ${ASR_ENABLED ? '✅ 已配置' : '❌ 未配置'}`);
 
 const app = express();
 // Trust the first proxy (Sealos ingress) for correct client IP handling
@@ -740,6 +750,20 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     // 使用 cheerio 提取纯文本正文
                     const $ = cheerio.load(pageRes.data);
 
+                    // ===== 视频管线：在移除 script 前提取视频 URL =====
+                    let videoTranscript = '';
+                    if (ASR_ENABLED && videoHandler.isVideoPlatform(payload.url, platform)) {
+                        try {
+                            const $raw = cheerio.load(pageRes.data); // 用未清理的 HTML
+                            videoTranscript = await videoHandler.processVideo(payload.url, $raw, platform, asrConfig) || '';
+                            if (videoTranscript) {
+                                console.log(`[视频管线] 转写成功: ${videoTranscript.length} 字`);
+                            }
+                        } catch (e) {
+                            console.log(`[视频管线] 跳过: ${e.message}`);
+                        }
+                    }
+
                     // 移除无关标签
                     $('script, style, nav, footer, header, aside, iframe, noscript, svg, .ad, .ads, .advertisement, .sidebar, .menu, .navigation').remove();
 
@@ -778,7 +802,14 @@ app.post('/capture', captureLimiter, async (req, res) => {
                     // 截取前 6000 字符（纯文本信息密度远高于 HTML）
                     contentToProcess = `[URL]: ${payload.url}\n[正文内容]:\n${mainContent.substring(0, 6000)}`;
                     rawOriginalText = mainContent.substring(0, 3000); // 保存原文前 3000 字
-                    console.log(`[抓取成功] 提取纯文本 ${mainContent.length} 字符`);
+
+                    // 合并视频转写内容
+                    if (videoTranscript) {
+                        contentToProcess += `\n\n[视频口播内容]:\n${videoTranscript.substring(0, 4000)}`;
+                        rawOriginalText += `\n\n--- 视频口播原文 ---\n${videoTranscript.substring(0, 3000)}`;
+                    }
+
+                    console.log(`[抓取成功] 文本 ${mainContent.length} 字${videoTranscript ? ` + 视频转写 ${videoTranscript.length} 字` : ''}`);
                 } catch (e) {
                     console.error("抓取失败:", e.message);
                     contentToProcess = `[URL]: ${payload.url}\n(网页抓取失败，请根据 URL 地址推测内容进行分析)`;
