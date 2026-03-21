@@ -1,6 +1,9 @@
 /**
- * 视频处理管线 - Puppeteer 版
- * 
+ * 视频处理管线 - puppeteer-core 版（Sealos 专用）
+ *
+ * 使用系统 Chromium（由 entrypoint.sh 安装），通过 puppeteer-core 驱动。
+ * 不依赖 puppeteer 全量包，避免 npm install 时下载 Chromium 导致 OOM。
+ *
  * 使用无头浏览器加载页面 → 拦截网络请求找到视频 URL → 下载 → ASR
  */
 
@@ -14,18 +17,39 @@ const xfyunAsr = require('./xfyunAsr');
 const TMP_DIR = path.join(os.tmpdir(), 'capture-os-video');
 if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR, { recursive: true });
 
-// Puppeteer 懒加载（避免未安装时崩溃）
+// puppeteer-core 懒加载（避免未安装时崩溃）
 let puppeteer = null;
 function getPuppeteer() {
     if (!puppeteer) {
         try {
-            puppeteer = require('puppeteer');
+            puppeteer = require('puppeteer-core');
         } catch (e) {
-            console.warn('[Puppeteer] 未安装，视频提取功能不可用');
+            console.warn('[Puppeteer] puppeteer-core 未安装，视频提取功能不可用');
             return null;
         }
     }
     return puppeteer;
+}
+
+// 自动探测系统 Chromium 路径
+function getChromiumExecutablePath() {
+    // 优先使用 entrypoint.sh 导出的环境变量
+    if (process.env.CHROMIUM_EXECUTABLE_PATH) {
+        return process.env.CHROMIUM_EXECUTABLE_PATH;
+    }
+    // 常见系统路径回退
+    const candidates = [
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome-stable',
+        '/usr/bin/google-chrome',
+        '/snap/bin/chromium'
+    ];
+    for (const p of candidates) {
+        if (require('fs').existsSync(p)) return p;
+    }
+    console.warn('[Puppeteer] 未找到系统 Chromium，请确认 entrypoint.sh 已安装');
+    return null;
 }
 
 // ===== 浏览器单例管理 =====
@@ -39,9 +63,13 @@ async function getBrowser() {
     const pptr = getPuppeteer();
     if (!pptr) throw new Error('Puppeteer 未安装');
 
-    console.log('[Puppeteer] 启动浏览器...');
+    const executablePath = getChromiumExecutablePath();
+    if (!executablePath) throw new Error('未找到 Chromium，无法启动浏览器');
+
+    console.log('[Puppeteer] 启动浏览器:', executablePath);
     browserInstance = await pptr.launch({
-        headless: 'new',
+        headless: true,
+        executablePath,                    // 使用系统 Chromium
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -49,7 +77,7 @@ async function getBrowser() {
             '--disable-gpu',
             '--disable-extensions',
             '--disable-background-networking',
-            '--single-process',             // 节省内存
+            '--single-process',            // 节省内存
             '--no-zygote'
         ],
         timeout: 30000
