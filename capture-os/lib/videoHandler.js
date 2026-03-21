@@ -37,6 +37,30 @@ function getChromiumExecutablePath() {
     if (process.env.CHROMIUM_EXECUTABLE_PATH) {
         return process.env.CHROMIUM_EXECUTABLE_PATH;
     }
+
+    // 扫描持久化存储卷中的 Chrome for Testing 二进制（entrypoint.sh 下载到此处）
+    const chromeCacheDir = '/home/node/.puppeteer-cache';
+    if (fs.existsSync(chromeCacheDir)) {
+        try {
+            // 递归找 chrome 可执行文件
+            const findChrome = (dir, depth = 0) => {
+                if (depth > 4) return null;
+                const entries = fs.readdirSync(dir);
+                for (const entry of entries) {
+                    const fullPath = `${dir}/${entry}`;
+                    if (entry === 'chrome' && fs.statSync(fullPath).isFile()) return fullPath;
+                    if (fs.statSync(fullPath).isDirectory()) {
+                        const found = findChrome(fullPath, depth + 1);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+            const found = findChrome(chromeCacheDir);
+            if (found) return found;
+        } catch { }
+    }
+
     // 常见系统路径回退
     const candidates = [
         '/usr/bin/chromium-browser',
@@ -46,11 +70,12 @@ function getChromiumExecutablePath() {
         '/snap/bin/chromium'
     ];
     for (const p of candidates) {
-        if (require('fs').existsSync(p)) return p;
+        if (fs.existsSync(p)) return p;
     }
-    console.warn('[Puppeteer] 未找到系统 Chromium，请确认 entrypoint.sh 已安装');
+    console.warn('[Puppeteer] 未找到 Chrome，请确认 entrypoint.sh 已成功下载');
     return null;
 }
+
 
 // ===== 浏览器单例管理 =====
 let browserInstance = null;

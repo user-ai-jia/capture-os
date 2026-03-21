@@ -1,46 +1,84 @@
 #!/bin/bash
 
 # Capture OS Pro - 启动脚本 (Sealos 专用)
-# 方案：puppeteer-core + 系统 Chromium（避免 npm install OOM）
+# 方案：运行时库走 apt（无 systemd 依赖）+ Chrome 二进制下载到持久化存储卷
+
+set -e
 
 APP_DIR="capture-os"
+CHROME_CACHE_DIR="/home/node/.puppeteer-cache"
 
 echo "================================================"
 echo "  Capture OS Pro - 启动检测"
 echo "================================================"
 
-# ── 1. 安装系统 Chromium + 所有运行依赖 ──────────────────────
-echo "[启动] 检查系统 Chromium..."
-if ! command -v chromium-browser &>/dev/null && ! command -v chromium &>/dev/null; then
-    echo "[启动] 安装 Chromium 及依赖库..."
-    apt-get update -qq && apt-get install -y -qq \
-        chromium \
-        libatk-bridge2.0-0 libdrm2 libxkbcommon0 libgbm1 \
-        libasound2 libnspr4 libnss3 libx11-xcb1 libxcomposite1 \
-        libxdamage1 libxrandr2 libxfixes3 libcups2 libpango-1.0-0 \
-        libcairo2 libatspi2.0-0 fonts-wqy-zenhei \
-        2>/dev/null || echo "[启动] 部分依赖安装失败，继续启动..."
-    echo "[启动] Chromium 安装完成"
+# ── 1. 安装 Chrome 运行时共享库（不装 chromium 包，避免 systemd 依赖链）──
+echo "[启动] 安装 Chrome 运行时依赖库..."
+apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    libnss3 libnspr4 \
+    libgbm1 \
+    libatk1.0-0 libatk-bridge2.0-0 \
+    libdrm2 \
+    libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
+    libxkbcommon0 \
+    libx11-xcb1 \
+    libpango-1.0-0 libcairo2 \
+    libatspi2.0-0 \
+    libcups2 \
+    libglib2.0-0 \
+    libasound2 \
+    fonts-wqy-zenhei \
+    wget ca-certificates \
+    2>/dev/null || echo "[启动] 部分依赖安装失败，继续..."
+echo "[启动] 运行时库安装完成"
+
+# ── 2. 检查是否已有 Chrome 二进制（持久化存储卷，重启不丢失）──────────
+CHROME_BIN=$(find "$CHROME_CACHE_DIR" -name "chrome" -type f 2>/dev/null | head -1)
+
+if [ -n "$CHROME_BIN" ] && [ -x "$CHROME_BIN" ]; then
+    echo "[启动] 已有 Chrome 二进制: $CHROME_BIN"
 else
-    echo "[启动] 系统 Chromium 已存在，跳过安装"
+    echo "[启动] 下载 Chrome for Testing 到持久化存储卷..."
+    mkdir -p "$CHROME_CACHE_DIR"
+
+    cd /tmp
+
+    # 获取最新稳定版本号
+    CHROME_VERSION=$(wget -qO- "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE" 2>/dev/null || echo "")
+
+    if [ -z "$CHROME_VERSION" ]; then
+        echo "[启动] ⚠️ 无法获取 Chrome 版本，使用 @puppeteer/browsers 安装..."
+        cd /home/node/capture-os/capture-os
+        npx --yes @puppeteer/browsers install chrome@stable --path "$CHROME_CACHE_DIR"
+    else
+        echo "[启动] Chrome 版本: $CHROME_VERSION"
+        CHROME_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip"
+        echo "[启动] 下载: $CHROME_URL"
+
+        wget -q -O /tmp/chrome-linux64.zip "$CHROME_URL"
+        unzip -q /tmp/chrome-linux64.zip -d "$CHROME_CACHE_DIR/"
+        rm -f /tmp/chrome-linux64.zip
+        chmod +x "$CHROME_CACHE_DIR/chrome-linux64/chrome"
+    fi
+
+    CHROME_BIN=$(find "$CHROME_CACHE_DIR" -name "chrome" -type f 2>/dev/null | head -1)
+    echo "[启动] Chrome 已安装: $CHROME_BIN"
 fi
 
-# ── 2. 导出 Chromium 路径供 puppeteer-core 使用 ──────────────
-CHROMIUM_PATH=$(command -v chromium-browser || command -v chromium || echo "")
-if [ -n "$CHROMIUM_PATH" ]; then
-    export CHROMIUM_EXECUTABLE_PATH="$CHROMIUM_PATH"
-    echo "[启动] Chromium 路径: $CHROMIUM_PATH"
+# ── 3. 导出 Chrome 路径 ────────────────────────────────────────────────
+if [ -n "$CHROME_BIN" ]; then
+    export CHROMIUM_EXECUTABLE_PATH="$CHROME_BIN"
+    echo "[启动] CHROMIUM_EXECUTABLE_PATH=$CHROMIUM_EXECUTABLE_PATH"
 else
-    echo "[启动] ⚠️  未找到系统 Chromium，视频提取功能将不可用"
+    echo "[启动] ⚠️ Chrome 未找到，视频提取功能不可用"
 fi
 
-# ── 3. 安装 npm 依赖（puppeteer-core 无 Chromium 下载，极快）──
+# ── 4. 安装 npm 依赖────────────────────────────────────────────────────
 echo "[启动] 安装 npm 依赖..."
-cd "$APP_DIR"
-PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm install --production 2>/dev/null \
-    || echo "[启动] npm install 警告（非致命）"
+cd "/home/node/capture-os/$APP_DIR"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm install --omit=dev --silent
 echo "[启动] npm 依赖就绪"
 
-# ── 4. 启动 Node.js 服务 ─────────────────────────────────────
+# ── 5. 启动 Node.js 服务 ───────────────────────────────────────────────
 echo "[启动] 启动 Capture OS Pro..."
 NODE_ENV=production node server.js
