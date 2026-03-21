@@ -55,9 +55,13 @@ else
         CHROME_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip"
         echo "[启动] 下载: $CHROME_URL"
 
-        wget -q -O /tmp/chrome-linux64.zip "$CHROME_URL"
-        unzip -q /tmp/chrome-linux64.zip -d "$CHROME_CACHE_DIR/"
-        rm -f /tmp/chrome-linux64.zip
+        # ⚡ 关键：下载到持久化存储卷（/tmp 是 tmpfs/内存文件系统，170MB 会 OOM）
+        wget -q -O "$CHROME_CACHE_DIR/chrome-linux64.zip" "$CHROME_URL"
+        echo "[启动] 解压中..."
+        unzip -q "$CHROME_CACHE_DIR/chrome-linux64.zip" -d "$CHROME_CACHE_DIR/"
+        # 立即删除 zip，释放磁盘空间
+        rm -f "$CHROME_CACHE_DIR/chrome-linux64.zip"
+
         chmod +x "$CHROME_CACHE_DIR/chrome-linux64/chrome"
     fi
 
